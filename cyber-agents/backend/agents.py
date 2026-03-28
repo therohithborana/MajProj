@@ -79,7 +79,7 @@ def threat_detection(state: AgentState) -> AgentState:
     )
 
     key_indicators = [
-        f"Traffic pattern matched {predicted_class} signature behavior from 80 extracted flow features.",
+        f"Traffic pattern aligned with the {predicted_class} pattern observed in this incident.",
         f"Observed packet rate of {attack['packet_rate']}/sec exceeded the baseline for {attack['target_ip']}.",
         f"Protocol {attack['protocol']} activity and destination port {attack['target_port']} aligned with the predicted class.",
         f"Source distribution from {len(attack['src_ips'])} host(s) increased the calculated risk score to {risk_score}.",
@@ -89,8 +89,6 @@ def threat_detection(state: AgentState) -> AgentState:
         "predicted_class": predicted_class,
         "confidence": confidence,
         "confidence_scores": confidence_scores,
-        "model": "RandomForest_v2.1",
-        "features_used": 80,
         "key_indicators": key_indicators,
         "risk_score": risk_score,
     }

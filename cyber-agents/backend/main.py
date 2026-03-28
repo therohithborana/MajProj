@@ -68,7 +68,7 @@ async def _run_detection_pipeline():
         {
             "attack_id": attack_id,
             "current_stage": "threat_detection",
-            "message": "Threat Detection Agent analyzing 80 network features...",
+            "message": "Threat Detection Agent analyzing incident telemetry...",
         },
     )
     await asyncio.sleep(1.0)

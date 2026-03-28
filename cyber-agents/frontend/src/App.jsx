@@ -273,8 +273,8 @@ export default function App() {
             <div style={{ color: colors.subtleText, fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Dashboard</div>
             <div style={{ fontSize: 34, fontWeight: 700, letterSpacing: -0.8, marginBottom: 6 }}>CyberAgent</div>
             <div style={{ color: colors.secondaryText, maxWidth: 640, lineHeight: 1.6 }}>
-              Multi-agent incident orchestration with simulated attacks, model classification, approval gates, and
-              report generation.
+              Multi-agent incident orchestration with attack generation, detection, approval gates, and report
+              generation.
             </div>
           </div>
 
@@ -447,8 +447,7 @@ export default function App() {
                         </div>
                       </div>
                       <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
-                        <Detail label="Model" value={selected.classification.model} />
-                        <Detail label="Features used" value={selected.classification.features_used} />
+                        <Detail label="Confidence" value={`${(selected.classification.confidence * 100).toFixed(1)}%`} />
                         <Detail label="Risk score" value={selected.classification.risk_score} accent={colors.amber} />
                       </div>
                     </div>

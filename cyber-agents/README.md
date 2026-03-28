@@ -35,7 +35,7 @@ API: [http://localhost:8000](http://localhost:8000)
 ## Demo Flow
 1. Click `SIMULATE ATTACK`
 2. Red Team generates attack
-3. Threat Detection classifies with ML model
+3. Threat Detection classifies the incident
 4. Gemini generates dynamic mitigation plan
 5. Admin approves or rejects on dashboard
 6. Action Agent executes response
