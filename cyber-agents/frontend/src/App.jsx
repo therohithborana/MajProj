@@ -4,74 +4,109 @@ const API_BASE = "http://localhost:8000";
 const WS_URL = "ws://localhost:8000/ws";
 
 const colors = {
-  background: "#0a0e1a",
-  accent: "#00d4ff",
-  green: "#00ff88",
-  red: "#ff4444",
-  purple: "#aa44ff",
-  amber: "#ffcc00",
-  text: "#e0e6f0",
-  panel: "#0d1b2e",
-  border: "#1e3a5f",
-  sidebar: "#080c18",
-  muted: "#7f95b5",
-  gray: "#9ba6ba",
+  background: "#f7f7f5",
+  page: "#fbfbfa",
+  card: "#ffffff",
+  mutedCard: "#f3f3f1",
+  border: "#e6e6e1",
+  text: "#191919",
+  secondaryText: "#6b6b67",
+  subtleText: "#8d8d88",
+  accent: "#2f76ff",
+  green: "#0f9d58",
+  red: "#d14343",
+  amber: "#b7791f",
+  purple: "#7c5cff",
+  gray: "#787774",
 };
 
 const severityColors = {
-  CRITICAL: "#ff4444",
-  HIGH: "#ff8800",
-  MEDIUM: "#ffcc00",
-  LOW: "#00ff88",
+  CRITICAL: "#d14343",
+  HIGH: "#d9730d",
+  MEDIUM: "#b7791f",
+  LOW: "#0f9d58",
 };
 
 const stageMeta = {
-  red_team_attacking: { icon: "🔴", label: "Under Attack" },
-  threat_detection: { icon: "🔵", label: "Detecting..." },
-  threat_detected: { icon: "🔵", label: "Detecting..." },
-  classified: { icon: "🤖", label: "Classified" },
-  awaiting_approval: { icon: "⏳", label: "Awaiting Approval" },
-  action_executing: { icon: "⚡", label: "Executing..." },
-  mitigated: { icon: "🛡️", label: "Mitigated" },
-  manual_queue: { icon: "📋", label: "Manual Queue" },
+  red_team_attacking: { icon: "●", label: "Under attack" },
+  threat_detection: { icon: "●", label: "Detecting" },
+  threat_detected: { icon: "●", label: "Detecting" },
+  classified: { icon: "●", label: "Classified" },
+  awaiting_approval: { icon: "●", label: "Awaiting approval" },
+  action_executing: { icon: "●", label: "Executing" },
+  mitigated: { icon: "●", label: "Mitigated" },
+  manual_queue: { icon: "●", label: "Manual queue" },
 };
 
 function formatTime(value) {
   return new Date(value || Date.now()).toLocaleTimeString();
 }
 
-function StatCard({ label, value, color }) {
+function Section({ title, children, eyebrow }) {
+  return (
+    <section
+      style={{
+        background: colors.card,
+        border: `1px solid ${colors.border}`,
+        borderRadius: 12,
+        padding: 20,
+        marginBottom: 16,
+      }}
+    >
+      <div style={{ marginBottom: 16 }}>
+        {eyebrow ? (
+          <div style={{ color: colors.subtleText, fontSize: 12, marginBottom: 6, fontWeight: 600 }}>{eyebrow}</div>
+        ) : null}
+        <div style={{ color: colors.text, fontSize: 18, fontWeight: 650 }}>{title}</div>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function StatCard({ label, value }) {
   return (
     <div
       style={{
-        background: "linear-gradient(135deg, rgba(13,27,46,0.95), rgba(8,12,24,0.95))",
+        background: colors.card,
         border: `1px solid ${colors.border}`,
-        borderRadius: 14,
+        borderRadius: 12,
         padding: "16px 18px",
-        boxShadow: "0 0 24px rgba(0, 212, 255, 0.08)",
       }}
     >
-      <div style={{ color: colors.muted, fontSize: 12, letterSpacing: 1.2 }}>{label}</div>
-      <div style={{ color: color || colors.text, fontSize: 28, fontWeight: 700, marginTop: 8 }}>{value}</div>
+      <div style={{ color: colors.subtleText, fontSize: 12, fontWeight: 600 }}>{label}</div>
+      <div style={{ color: colors.text, fontSize: 28, fontWeight: 700, marginTop: 8 }}>{value}</div>
     </div>
   );
 }
 
-function Section({ title, children }) {
+function Detail({ label, value, accent }) {
   return (
-    <div
+    <div style={{ minWidth: 180 }}>
+      <div style={{ color: colors.subtleText, fontSize: 12, marginBottom: 4, fontWeight: 600 }}>{label}</div>
+      <div style={{ color: accent || colors.text, fontWeight: 600, lineHeight: 1.5 }}>{value}</div>
+    </div>
+  );
+}
+
+function StatusPill({ color, children, subtle }) {
+  return (
+    <span
       style={{
-        background: "linear-gradient(180deg, rgba(13,27,46,0.98), rgba(9,18,32,0.98))",
-        border: `1px solid ${colors.border}`,
-        borderRadius: 18,
-        padding: 20,
-        marginBottom: 18,
-        boxShadow: "0 0 30px rgba(0, 0, 0, 0.24)",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        padding: "6px 10px",
+        borderRadius: 999,
+        border: `1px solid ${subtle ? colors.border : color}`,
+        background: subtle ? colors.mutedCard : `${color}12`,
+        color: subtle ? colors.secondaryText : color,
+        fontSize: 12,
+        fontWeight: 600,
       }}
     >
-      <div style={{ color: colors.accent, fontWeight: 700, letterSpacing: 1.4, marginBottom: 16 }}>{title}</div>
       {children}
-    </div>
+    </span>
   );
 }
 
@@ -215,65 +250,44 @@ export default function App() {
     <div
       style={{
         minHeight: "100vh",
-        background:
-          "radial-gradient(circle at top left, rgba(0, 212, 255, 0.12), transparent 28%), radial-gradient(circle at top right, rgba(170, 68, 255, 0.16), transparent 22%), linear-gradient(180deg, #060914, #0a0e1a 35%, #09111f)",
+        background: colors.background,
         color: colors.text,
-        fontFamily: '"Segoe UI", "Helvetica Neue", sans-serif',
-        padding: 20,
+        fontFamily:
+          'ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif',
+        padding: 24,
         boxSizing: "border-box",
       }}
     >
-      <div style={{ maxWidth: 1600, margin: "0 auto" }}>
+      <div style={{ maxWidth: 1480, margin: "0 auto" }}>
         <div
           style={{
             display: "flex",
             justifyContent: "space-between",
-            alignItems: "center",
+            alignItems: "flex-start",
             gap: 16,
-            marginBottom: 18,
             flexWrap: "wrap",
+            marginBottom: 20,
           }}
         >
           <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <div style={{ fontSize: 30 }}>🛡️</div>
-              <div>
-                <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: 2 }}>CYBERAGENT</div>
-                <div style={{ color: colors.muted, fontSize: 12, letterSpacing: 2 }}>
-                  MULTI-AGENT SECURITY ORCHESTRATION
-                </div>
-              </div>
+            <div style={{ color: colors.subtleText, fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Dashboard</div>
+            <div style={{ fontSize: 34, fontWeight: 700, letterSpacing: -0.8, marginBottom: 6 }}>CyberAgent</div>
+            <div style={{ color: colors.secondaryText, maxWidth: 640, lineHeight: 1.6 }}>
+              Multi-agent incident orchestration with simulated attacks, model classification, approval gates, and
+              report generation.
             </div>
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                padding: "10px 14px",
-                border: `1px solid ${colors.border}`,
-                borderRadius: 999,
-                background: "rgba(8,12,24,0.8)",
-              }}
-            >
-              <div
-                style={{
-                  width: 10,
-                  height: 10,
-                  borderRadius: "50%",
-                  background: connected ? colors.green : colors.red,
-                  boxShadow: `0 0 12px ${connected ? colors.green : colors.red}`,
-                }}
-              />
-              <span style={{ fontSize: 12 }}>{connected ? "Live" : "Offline"}</span>
-            </div>
-            <button onClick={simulateAttack} style={buttonStyle(colors.accent, "#02151d")}>
-              SIMULATE ATTACK
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <StatusPill color={connected ? colors.green : colors.red}>
+              <span style={{ fontSize: 10 }}>{connected ? "●" : "●"}</span>
+              {connected ? "Live" : "Offline"}
+            </StatusPill>
+            <button onClick={simulateAttack} style={primaryButtonStyle}>
+              Simulate attack
             </button>
-            <button onClick={toggleAuto} style={buttonStyle(autoRunning ? colors.red : colors.purple, "#f7f8fb")}>
-              {autoRunning ? "STOP AUTO" : "AUTO DEMO"}
+            <button onClick={toggleAuto} style={secondaryButtonStyle}>
+              {autoRunning ? "Stop auto" : "Auto demo"}
             </button>
           </div>
         </div>
@@ -283,53 +297,53 @@ export default function App() {
             display: "grid",
             gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
             gap: 12,
-            marginBottom: 18,
+            marginBottom: 20,
           }}
         >
-          <StatCard label="TOTAL INCIDENTS" value={stats.total} color={colors.accent} />
-          <StatCard label="PENDING APPROVAL" value={stats.pending} color={colors.amber} />
-          <StatCard label="MITIGATED" value={stats.mitigated} color={colors.green} />
-          <StatCard label="CRITICAL" value={stats.critical} color={colors.red} />
+          <StatCard label="Total incidents" value={stats.total} />
+          <StatCard label="Pending approval" value={stats.pending} />
+          <StatCard label="Mitigated" value={stats.mitigated} />
+          <StatCard label="Critical" value={stats.critical} />
         </div>
 
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "340px minmax(0, 1fr)",
-            gap: 18,
-            minHeight: "calc(100vh - 220px)",
+            gridTemplateColumns: "320px minmax(0, 1fr)",
+            gap: 20,
+            minHeight: "calc(100vh - 210px)",
           }}
         >
-          <div
+          <aside
             style={{
-              background: "linear-gradient(180deg, rgba(8,12,24,0.98), rgba(7,10,20,0.96))",
+              background: colors.page,
               border: `1px solid ${colors.border}`,
-              borderRadius: 18,
-              padding: 16,
+              borderRadius: 12,
+              padding: 14,
               display: "flex",
               flexDirection: "column",
-              gap: 16,
+              gap: 14,
               minHeight: 0,
             }}
           >
             <div style={{ minHeight: 0, flex: 1, display: "flex", flexDirection: "column" }}>
-              <div style={sidebarTitleStyle}>LIVE FEED</div>
-              <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 10, paddingRight: 4 }}>
+              <div style={sidebarTitleStyle}>Live feed</div>
+              <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, paddingRight: 2 }}>
                 {feed.map((entry) => (
                   <div
                     key={entry.id}
                     style={{
+                      background: colors.card,
                       border: `1px solid ${colors.border}`,
-                      borderRadius: 12,
+                      borderRadius: 10,
                       padding: 12,
-                      background: "rgba(13,27,46,0.72)",
                     }}
                   >
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-                      <span style={{ color: colors.accent, fontSize: 12, fontWeight: 700 }}>{entry.type}</span>
-                      <span style={{ color: colors.muted, fontSize: 11 }}>{formatTime(entry.timestamp)}</span>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 6 }}>
+                      <span style={{ color: colors.text, fontSize: 12, fontWeight: 600 }}>{entry.type}</span>
+                      <span style={{ color: colors.subtleText, fontSize: 11 }}>{formatTime(entry.timestamp)}</span>
                     </div>
-                    <div style={{ color: colors.gray, fontSize: 12 }}>
+                    <div style={{ color: colors.secondaryText, fontSize: 12, lineHeight: 1.5 }}>
                       {entry.data.message || entry.data.current_stage || "Pipeline event received"}
                     </div>
                   </div>
@@ -338,8 +352,8 @@ export default function App() {
             </div>
 
             <div style={{ minHeight: 0, flex: 1, display: "flex", flexDirection: "column" }}>
-              <div style={sidebarTitleStyle}>INCIDENTS</div>
-              <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 10, paddingRight: 4 }}>
+              <div style={sidebarTitleStyle}>Incidents</div>
+              <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, paddingRight: 2 }}>
                 {incidentList.map((incident) => {
                   const attack = incident.attack || {};
                   const meta = stageMeta[incident.current_stage] || stageMeta.red_team_attacking;
@@ -349,42 +363,33 @@ export default function App() {
                       onClick={() => setSelectedId(attack.attack_id)}
                       style={{
                         textAlign: "left",
-                        border: `1px solid ${selectedId === attack.attack_id ? colors.accent : colors.border}`,
-                        borderRadius: 14,
-                        padding: 14,
+                        border: `1px solid ${selectedId === attack.attack_id ? "#d8d8d2" : colors.border}`,
+                        borderRadius: 10,
+                        padding: 12,
                         cursor: "pointer",
-                        background:
-                          selectedId === attack.attack_id
-                            ? "linear-gradient(135deg, rgba(0,212,255,0.16), rgba(13,27,46,0.92))"
-                            : "rgba(13,27,46,0.7)",
+                        background: selectedId === attack.attack_id ? colors.mutedCard : colors.card,
                         color: colors.text,
                       }}
                     >
-                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, gap: 8 }}>
-                        <span style={{ fontWeight: 700 }}>{attack.attack_id}</span>
-                        <span
-                          style={{
-                            color: severityColors[attack.severity] || colors.text,
-                            fontWeight: 700,
-                            fontSize: 12,
-                          }}
-                        >
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 8 }}>
+                        <div style={{ fontWeight: 650 }}>{attack.attack_id}</div>
+                        <StatusPill color={severityColors[attack.severity] || colors.gray}>
                           {attack.severity}
-                        </span>
+                        </StatusPill>
                       </div>
-                      <div style={{ color: colors.text, fontSize: 14, marginBottom: 6 }}>{attack.attack_type}</div>
-                      <div style={{ color: colors.gray, fontSize: 12, marginBottom: 6 }}>
+                      <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>{attack.attack_type}</div>
+                      <div style={{ color: colors.secondaryText, fontSize: 12, marginBottom: 4 }}>
                         {meta.icon} {meta.label}
                       </div>
-                      <div style={{ color: colors.muted, fontSize: 12 }}>{attack.primary_src_ip}</div>
+                      <div style={{ color: colors.subtleText, fontSize: 12 }}>{attack.primary_src_ip}</div>
                     </button>
                   );
                 })}
               </div>
             </div>
-          </div>
+          </aside>
 
-          <div style={{ minWidth: 0 }}>
+          <main style={{ minWidth: 0 }}>
             {!selected ? (
               <div
                 style={{
@@ -393,61 +398,82 @@ export default function App() {
                   alignItems: "center",
                   justifyContent: "center",
                   border: `1px solid ${colors.border}`,
-                  borderRadius: 18,
-                  background: "rgba(13,27,46,0.72)",
+                  borderRadius: 12,
+                  background: colors.page,
                 }}
               >
                 <div style={{ textAlign: "center" }}>
-                  <div style={{ fontSize: 56, marginBottom: 18 }}>🛡️</div>
-                  <div style={{ fontSize: 24, fontWeight: 700 }}>No incident selected</div>
+                  <div style={{ color: colors.subtleText, fontSize: 14, marginBottom: 8 }}>No incident selected</div>
+                  <div style={{ fontSize: 28, fontWeight: 650 }}>Choose an incident from the sidebar</div>
                 </div>
               </div>
             ) : (
               <>
-                <Section title="RED TEAM AGENT">
+                <Section title={selected.attack.attack_type} eyebrow="Red Team Agent">
                   <div style={detailGridStyle}>
-                    <Detail label="Attack Type" value={selected.attack.attack_type} accent={colors.red} />
+                    <Detail label="Attack type" value={selected.attack.attack_type} />
                     <Detail label="Target" value={`${selected.attack.target_ip}:${selected.attack.target_port}`} />
-                    <Detail label="Packet Rate" value={`${selected.attack.packet_rate}/sec`} />
+                    <Detail label="Packet rate" value={`${selected.attack.packet_rate}/sec`} />
                     <Detail label="Protocol" value={selected.attack.protocol} />
                   </div>
-                  <div style={{ marginTop: 14, color: colors.gray }}>
-                    <strong style={{ color: colors.text }}>Source IPs:</strong> {selected.attack.src_ips.join(", ")}
+                  <div style={bodyRowStyle}>
+                    <span style={bodyLabelStyle}>Source IPs</span>
+                    <span>{selected.attack.src_ips.join(", ")}</span>
                   </div>
-                  <div style={{ marginTop: 10, color: colors.gray }}>{selected.attack.description}</div>
+                  <div style={bodyRowStyle}>
+                    <span style={bodyLabelStyle}>Description</span>
+                    <span>{selected.attack.description}</span>
+                  </div>
                   <div style={monoBoxStyle}>{selected.attack.raw_log}</div>
                 </Section>
 
                 {selected.classification && (
-                  <Section title="THREAT DETECTION AGENT">
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
+                  <Section title="Threat Detection Agent" eyebrow="Classification">
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 18,
+                        flexWrap: "wrap",
+                        marginBottom: 18,
+                      }}
+                    >
                       <div>
-                        <div style={{ color: colors.muted, fontSize: 12 }}>PREDICTED CLASS</div>
-                        <div style={{ color: colors.purple, fontSize: 30, fontWeight: 800 }}>
+                        <div style={{ color: colors.subtleText, fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                          Predicted class
+                        </div>
+                        <div style={{ color: colors.text, fontSize: 28, fontWeight: 700 }}>
                           {selected.classification.predicted_class}
                         </div>
                       </div>
                       <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
                         <Detail label="Model" value={selected.classification.model} />
-                        <Detail label="Features Used" value={selected.classification.features_used} />
-                        <Detail label="Risk Score" value={selected.classification.risk_score} accent={colors.amber} />
+                        <Detail label="Features used" value={selected.classification.features_used} />
+                        <Detail label="Risk score" value={selected.classification.risk_score} accent={colors.amber} />
                       </div>
                     </div>
 
-                    <div style={{ marginTop: 18 }}>
+                    <div style={{ display: "grid", gap: 12, marginBottom: 18 }}>
                       {Object.entries(selected.classification.confidence_scores).map(([label, value]) => (
-                        <div key={label} style={{ marginBottom: 12 }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                            <span style={{ color: colors.text }}>{label}</span>
-                            <span style={{ color: colors.gray }}>{(value * 100).toFixed(1)}%</span>
+                        <div key={label}>
+                          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                            <span style={{ fontSize: 14, fontWeight: 600 }}>{label}</span>
+                            <span style={{ color: colors.secondaryText, fontSize: 13 }}>{(value * 100).toFixed(1)}%</span>
                           </div>
-                          <div style={{ background: "#09111d", borderRadius: 999, height: 12, overflow: "hidden" }}>
+                          <div
+                            style={{
+                              background: colors.mutedCard,
+                              borderRadius: 999,
+                              height: 8,
+                              overflow: "hidden",
+                            }}
+                          >
                             <div
                               style={{
                                 width: `${value * 100}%`,
                                 height: "100%",
                                 background:
-                                  label === selected.classification.predicted_class ? colors.purple : "#24364f",
+                                  label === selected.classification.predicted_class ? colors.text : "#cfcfca",
                               }}
                             />
                           </div>
@@ -455,52 +481,56 @@ export default function App() {
                       ))}
                     </div>
 
-                    <ul style={{ margin: "16px 0 0 18px", color: colors.gray, lineHeight: 1.7 }}>
+                    <div style={{ color: colors.secondaryText, lineHeight: 1.7 }}>
                       {selected.classification.key_indicators.map((item) => (
-                        <li key={item}>{item}</li>
+                        <div key={item} style={{ marginBottom: 8 }}>
+                          • {item}
+                        </div>
                       ))}
-                    </ul>
+                    </div>
                   </Section>
                 )}
 
                 {selected.mitigation_plan && (
-                  <Section title="📋 THREAT RESOLVE AGENT — GEMINI GENERATED PLAN">
+                  <Section title="Threat Resolve Agent" eyebrow="Gemini generated plan">
                     <div style={detailGridStyle}>
-                      <Detail label="Strategy" value={selected.mitigation_plan.strategy} accent={colors.accent} />
+                      <Detail label="Strategy" value={selected.mitigation_plan.strategy} />
                       <Detail
-                        label="Estimated Mitigation Time"
+                        label="Estimated mitigation time"
                         value={selected.mitigation_plan.estimated_mitigation_time}
                       />
-                      <Detail label="Collateral Risk" value={selected.mitigation_plan.collateral_risk} accent={colors.amber} />
+                      <Detail label="Collateral risk" value={selected.mitigation_plan.collateral_risk} accent={colors.amber} />
                     </div>
 
-                    <div style={{ display: "grid", gap: 14, marginTop: 18 }}>
+                    <div style={{ display: "grid", gap: 12, marginTop: 18 }}>
                       {selected.mitigation_plan.steps.map((step) => (
                         <div
                           key={`${step.step}-${step.action}`}
                           style={{
                             border: `1px solid ${colors.border}`,
-                            borderRadius: 14,
-                            padding: 16,
-                            background: "rgba(9,18,32,0.85)",
+                            borderRadius: 10,
+                            padding: 14,
+                            background: colors.page,
                           }}
                         >
-                          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                            <div style={{ color: colors.text, fontWeight: 700 }}>
-                              Step {step.step}: {step.action}
+                          <div
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              gap: 12,
+                              flexWrap: "wrap",
+                              marginBottom: 10,
+                            }}
+                          >
+                            <div style={{ fontWeight: 650 }}>
+                              {step.step}. {step.action}
                             </div>
-                            <div
-                              style={{
-                                color: step.reversible ? colors.green : colors.red,
-                                fontSize: 12,
-                                fontWeight: 700,
-                              }}
-                            >
-                              {step.reversible ? "REVERSIBLE" : "PERMANENT"}
-                            </div>
+                            <StatusPill color={step.reversible ? colors.green : colors.red}>
+                              {step.reversible ? "Reversible" : "Permanent"}
+                            </StatusPill>
                           </div>
                           <div style={monoBoxStyle}>{step.command}</div>
-                          <div style={{ color: colors.gray }}>{step.impact}</div>
+                          <div style={{ color: colors.secondaryText, lineHeight: 1.6, marginTop: 12 }}>{step.impact}</div>
                         </div>
                       ))}
                     </div>
@@ -509,29 +539,29 @@ export default function App() {
                       <div
                         style={{
                           marginTop: 18,
-                          border: `1px solid ${colors.amber}`,
-                          borderRadius: 14,
-                          padding: 16,
-                          background: "rgba(255, 204, 0, 0.08)",
+                          border: `1px solid ${colors.border}`,
+                          borderRadius: 10,
+                          padding: 14,
+                          background: colors.mutedCard,
                         }}
                       >
-                        <div style={{ color: colors.amber, fontWeight: 700, marginBottom: 12 }}>
-                          Awaiting administrator approval before executing controls.
+                        <div style={{ color: colors.text, fontWeight: 600, marginBottom: 12 }}>
+                          Awaiting administrator approval before execution.
                         </div>
-                        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                           <button
                             disabled={decisionLoading[selected.attack.attack_id]}
                             onClick={() => submitDecision(selected.attack.attack_id, "approved")}
-                            style={buttonStyle(colors.green, "#04120b", decisionLoading[selected.attack.attack_id])}
+                            style={approveButtonStyle(decisionLoading[selected.attack.attack_id])}
                           >
-                            APPROVE
+                            Approve
                           </button>
                           <button
                             disabled={decisionLoading[selected.attack.attack_id]}
                             onClick={() => submitDecision(selected.attack.attack_id, "rejected")}
-                            style={buttonStyle(colors.red, "#170607", decisionLoading[selected.attack.attack_id])}
+                            style={rejectButtonStyle(decisionLoading[selected.attack.attack_id])}
                           >
-                            REJECT
+                            Reject
                           </button>
                         </div>
                       </div>
@@ -540,78 +570,63 @@ export default function App() {
                 )}
 
                 {selected.action_result && (
-                  <Section title="ACTION AGENT">
-                    <div
-                      style={{
-                        color:
-                          selected.action_result.status === "MITIGATED" ? colors.green : colors.gray,
-                        fontSize: 26,
-                        fontWeight: 800,
-                        marginBottom: 16,
-                      }}
-                    >
-                      {selected.action_result.status}
+                  <Section title="Action Agent" eyebrow="Execution">
+                    <div style={{ marginBottom: 16 }}>
+                      <StatusPill
+                        color={selected.action_result.status === "MITIGATED" ? colors.green : colors.gray}
+                      >
+                        {selected.action_result.status}
+                      </StatusPill>
                     </div>
+
                     {selected.action_result.status === "MITIGATED" ? (
                       <div style={detailGridStyle}>
-                        <Detail label="Steps Executed" value={selected.action_result.steps_executed.length} />
+                        <Detail label="Steps executed" value={selected.action_result.steps_executed.length} />
                         <Detail
-                          label="Total Execution Time"
+                          label="Total execution time"
                           value={`${selected.action_result.total_execution_time_ms} ms`}
                         />
-                        <Detail
-                          label="Blocked IPs"
-                          value={selected.action_result.blocked_ips.join(", ")}
-                          accent={colors.green}
-                        />
+                        <Detail label="Blocked IPs" value={selected.action_result.blocked_ips.join(", ")} />
                       </div>
                     ) : (
                       <div style={detailGridStyle}>
-                        <Detail label="Ticket ID" value={selected.action_result.ticket_id} accent={colors.amber} />
-                        <Detail label="Assigned To" value={selected.action_result.assigned_to} />
+                        <Detail label="Ticket ID" value={selected.action_result.ticket_id} />
+                        <Detail label="Assigned to" value={selected.action_result.assigned_to} />
                       </div>
                     )}
                   </Section>
                 )}
 
                 {selected.incident_report && (
-                  <Section title="📄 INCIDENT REPORT — GEMINI GENERATED">
+                  <Section title="Incident Report" eyebrow="Gemini generated">
                     <div
                       style={{
-                        border: `1px solid ${colors.purple}`,
-                        borderRadius: 16,
-                        padding: 18,
-                        background: "linear-gradient(135deg, rgba(170,68,255,0.16), rgba(13,27,46,0.88))",
-                        marginBottom: 18,
+                        border: `1px solid ${colors.border}`,
+                        borderRadius: 10,
+                        padding: 16,
+                        background: colors.page,
                         lineHeight: 1.7,
+                        marginBottom: 18,
                       }}
                     >
                       {selected.incident_report.executive_summary}
                     </div>
 
-                    <div style={{ display: "grid", gap: 8, marginBottom: 18 }}>
-                      {Object.entries(selected.incident_report.attack_summary).map(([label, value]) => (
-                        <div
-                          key={label}
-                          style={{
-                            display: "grid",
-                            gridTemplateColumns: "160px 1fr",
-                            gap: 12,
-                            padding: "10px 12px",
-                            borderRadius: 10,
-                            background: "rgba(9,18,32,0.78)",
-                            border: `1px solid ${colors.border}`,
-                          }}
-                        >
-                          <div style={{ color: colors.muted, textTransform: "capitalize" }}>{label.replace("_", " ")}</div>
-                          <div>{String(value)}</div>
-                        </div>
-                      ))}
+                    <div style={{ marginBottom: 18 }}>
+                      <div style={subsectionTitleStyle}>Attack summary</div>
+                      <div style={{ display: "grid", gap: 8 }}>
+                        {Object.entries(selected.incident_report.attack_summary).map(([label, value]) => (
+                          <div key={label} style={tableRowStyle}>
+                            <div style={tableLabelStyle}>{label.replace("_", " ")}</div>
+                            <div>{String(value)}</div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
 
                     <div style={{ marginBottom: 18 }}>
-                      <div style={{ color: colors.accent, marginBottom: 10, fontWeight: 700 }}>Recommendations</div>
-                      <ol style={{ margin: "0 0 0 20px", lineHeight: 1.8 }}>
+                      <div style={subsectionTitleStyle}>Recommendations</div>
+                      <ol style={{ margin: "0 0 0 20px", lineHeight: 1.8, color: colors.secondaryText }}>
                         {selected.incident_report.recommendations.map((item) => (
                           <li key={item}>{item}</li>
                         ))}
@@ -619,22 +634,11 @@ export default function App() {
                     </div>
 
                     <div>
-                      <div style={{ color: colors.accent, marginBottom: 10, fontWeight: 700 }}>Timeline</div>
+                      <div style={subsectionTitleStyle}>Timeline</div>
                       <div style={{ display: "grid", gap: 8 }}>
                         {Object.entries(selected.incident_report.timeline).map(([label, value]) => (
-                          <div
-                            key={label}
-                            style={{
-                              display: "grid",
-                              gridTemplateColumns: "160px 1fr",
-                              gap: 12,
-                              padding: "10px 12px",
-                              borderRadius: 10,
-                              background: "rgba(9,18,32,0.78)",
-                              border: `1px solid ${colors.border}`,
-                            }}
-                          >
-                            <div style={{ color: colors.muted, textTransform: "capitalize" }}>{label}</div>
+                          <div key={label} style={tableRowStyle}>
+                            <div style={tableLabelStyle}>{label}</div>
                             <div>{String(value)}</div>
                           </div>
                         ))}
@@ -644,42 +648,63 @@ export default function App() {
                 )}
               </>
             )}
-          </div>
+          </main>
         </div>
       </div>
     </div>
   );
 }
 
-function Detail({ label, value, accent }) {
-  return (
-    <div style={{ minWidth: 180 }}>
-      <div style={{ color: colors.muted, fontSize: 12, marginBottom: 4, letterSpacing: 1 }}>{label}</div>
-      <div style={{ color: accent || colors.text, fontWeight: 700, lineHeight: 1.5 }}>{value}</div>
-    </div>
-  );
-}
+const primaryButtonStyle = {
+  border: "none",
+  borderRadius: 10,
+  padding: "11px 14px",
+  background: colors.text,
+  color: "#ffffff",
+  fontWeight: 600,
+  cursor: "pointer",
+};
 
-function buttonStyle(background, color, disabled) {
+const secondaryButtonStyle = {
+  border: `1px solid ${colors.border}`,
+  borderRadius: 10,
+  padding: "11px 14px",
+  background: colors.card,
+  color: colors.text,
+  fontWeight: 600,
+  cursor: "pointer",
+};
+
+function approveButtonStyle(disabled) {
   return {
     border: "none",
-    borderRadius: 12,
-    padding: "12px 16px",
-    background,
-    color,
-    fontWeight: 800,
-    letterSpacing: 0.8,
+    borderRadius: 10,
+    padding: "10px 14px",
+    background: colors.text,
+    color: "#ffffff",
+    fontWeight: 600,
     cursor: disabled ? "not-allowed" : "pointer",
-    opacity: disabled ? 0.6 : 1,
-    boxShadow: `0 0 18px ${background}33`,
+    opacity: disabled ? 0.55 : 1,
+  };
+}
+
+function rejectButtonStyle(disabled) {
+  return {
+    border: `1px solid ${colors.border}`,
+    borderRadius: 10,
+    padding: "10px 14px",
+    background: colors.card,
+    color: colors.text,
+    fontWeight: 600,
+    cursor: disabled ? "not-allowed" : "pointer",
+    opacity: disabled ? 0.55 : 1,
   };
 }
 
 const sidebarTitleStyle = {
-  color: colors.accent,
-  fontWeight: 700,
-  letterSpacing: 1.4,
-  marginBottom: 12,
+  color: colors.text,
+  fontWeight: 650,
+  marginBottom: 10,
 };
 
 const detailGridStyle = {
@@ -688,13 +713,51 @@ const detailGridStyle = {
   gap: 16,
 };
 
+const bodyRowStyle = {
+  display: "grid",
+  gridTemplateColumns: "140px 1fr",
+  gap: 16,
+  marginTop: 14,
+  color: colors.secondaryText,
+  lineHeight: 1.6,
+};
+
+const bodyLabelStyle = {
+  color: colors.subtleText,
+  fontWeight: 600,
+};
+
 const monoBoxStyle = {
-  marginTop: 12,
-  background: "#06101b",
+  marginTop: 14,
+  background: "#fafaf9",
   border: `1px solid ${colors.border}`,
-  borderRadius: 12,
+  borderRadius: 10,
   padding: 14,
   fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
-  color: colors.green,
+  color: colors.text,
   overflowX: "auto",
+  fontSize: 13,
+  lineHeight: 1.6,
+};
+
+const subsectionTitleStyle = {
+  color: colors.text,
+  fontWeight: 650,
+  marginBottom: 10,
+};
+
+const tableRowStyle = {
+  display: "grid",
+  gridTemplateColumns: "160px 1fr",
+  gap: 12,
+  padding: "10px 12px",
+  borderRadius: 10,
+  background: colors.page,
+  border: `1px solid ${colors.border}`,
+};
+
+const tableLabelStyle = {
+  color: colors.subtleText,
+  textTransform: "capitalize",
+  fontWeight: 600,
 };
