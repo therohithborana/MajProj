@@ -12,11 +12,9 @@ const colors = {
   text: "#191919",
   secondaryText: "#6b6b67",
   subtleText: "#8d8d88",
-  accent: "#2f76ff",
   green: "#0f9d58",
   red: "#d14343",
   amber: "#b7791f",
-  purple: "#7c5cff",
   gray: "#787774",
 };
 
@@ -28,12 +26,12 @@ const severityColors = {
 };
 
 const stageMeta = {
-  red_team_attacking: { icon: "●", label: "Under attack" },
-  threat_detection: { icon: "●", label: "Detecting" },
-  threat_detected: { icon: "●", label: "Detecting" },
-  classified: { icon: "●", label: "Classified" },
+  red_team_attacking: { icon: "●", label: "Red team generated telemetry" },
+  log_monitoring: { icon: "●", label: "Monitoring logs" },
+  anomaly_detected: { icon: "●", label: "Anomaly detected" },
+  classified: { icon: "●", label: "Incident classified" },
   awaiting_approval: { icon: "●", label: "Awaiting approval" },
-  action_executing: { icon: "●", label: "Executing" },
+  action_executing: { icon: "●", label: "Executing response" },
   mitigated: { icon: "●", label: "Mitigated" },
   manual_queue: { icon: "●", label: "Manual queue" },
 };
@@ -42,7 +40,7 @@ function formatTime(value) {
   return new Date(value || Date.now()).toLocaleTimeString();
 }
 
-function Section({ title, children, eyebrow }) {
+function Section({ title, eyebrow, children }) {
   return (
     <section
       style={{
@@ -54,9 +52,7 @@ function Section({ title, children, eyebrow }) {
       }}
     >
       <div style={{ marginBottom: 16 }}>
-        {eyebrow ? (
-          <div style={{ color: colors.subtleText, fontSize: 12, marginBottom: 6, fontWeight: 600 }}>{eyebrow}</div>
-        ) : null}
+        {eyebrow ? <div style={eyebrowStyle}>{eyebrow}</div> : null}
         <div style={{ color: colors.text, fontSize: 18, fontWeight: 650 }}>{title}</div>
       </div>
       {children}
@@ -66,15 +62,8 @@ function Section({ title, children, eyebrow }) {
 
 function StatCard({ label, value }) {
   return (
-    <div
-      style={{
-        background: colors.card,
-        border: `1px solid ${colors.border}`,
-        borderRadius: 12,
-        padding: "16px 18px",
-      }}
-    >
-      <div style={{ color: colors.subtleText, fontSize: 12, fontWeight: 600 }}>{label}</div>
+    <div style={statCardStyle}>
+      <div style={eyebrowStyle}>{label}</div>
       <div style={{ color: colors.text, fontSize: 28, fontWeight: 700, marginTop: 8 }}>{value}</div>
     </div>
   );
@@ -83,13 +72,13 @@ function StatCard({ label, value }) {
 function Detail({ label, value, accent }) {
   return (
     <div style={{ minWidth: 180 }}>
-      <div style={{ color: colors.subtleText, fontSize: 12, marginBottom: 4, fontWeight: 600 }}>{label}</div>
+      <div style={eyebrowStyle}>{label}</div>
       <div style={{ color: accent || colors.text, fontWeight: 600, lineHeight: 1.5 }}>{value}</div>
     </div>
   );
 }
 
-function StatusPill({ color, children, subtle }) {
+function StatusPill({ color, children }) {
   return (
     <span
       style={{
@@ -98,15 +87,33 @@ function StatusPill({ color, children, subtle }) {
         gap: 6,
         padding: "6px 10px",
         borderRadius: 999,
-        border: `1px solid ${subtle ? colors.border : color}`,
-        background: subtle ? colors.mutedCard : `${color}12`,
-        color: subtle ? colors.secondaryText : color,
+        border: `1px solid ${color}`,
+        background: `${color}12`,
+        color,
         fontSize: 12,
         fontWeight: 600,
       }}
     >
       {children}
     </span>
+  );
+}
+
+function LogBlock({ title, lines }) {
+  if (!lines || !lines.length) {
+    return null;
+  }
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div style={subsectionTitleStyle}>{title}</div>
+      <div style={monoBoxStyle}>
+        {lines.map((line, index) => (
+          <div key={`${title}-${index}`} style={{ marginBottom: index === lines.length - 1 ? 0 : 8 }}>
+            {line}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -125,9 +132,7 @@ export default function App() {
     const connect = () => {
       socket = new WebSocket(WS_URL);
 
-      socket.onopen = () => {
-        setConnected(true);
-      };
+      socket.onopen = () => setConnected(true);
 
       socket.onmessage = (event) => {
         const payload = JSON.parse(event.data);
@@ -142,7 +147,7 @@ export default function App() {
         if (payload.type === "init") {
           const mapped = {};
           (payload.data.incidents || []).forEach((incident) => {
-            mapped[incident.attack.attack_id] = incident;
+            mapped[incident.simulation.attack_id] = incident;
           });
           setIncidents(mapped);
           setAutoRunning(Boolean(payload.data.running));
@@ -155,9 +160,12 @@ export default function App() {
         if (payload.type === "red_team_attack") {
           setIncidents((current) => ({
             ...current,
-            [payload.data.attack.attack_id]: payload.data,
+            [payload.data.attack_id]: {
+              ...(current[payload.data.attack_id] || {}),
+              ...payload.data,
+            },
           }));
-          setSelectedId(payload.data.attack.attack_id);
+          setSelectedId(payload.data.attack_id);
         }
 
         if (payload.type === "agent_update" || payload.type === "incident_resolved") {
@@ -168,7 +176,7 @@ export default function App() {
               [payload.data.attack_id]: {
                 ...existing,
                 ...payload.data,
-                attack: existing.attack,
+                simulation: existing.simulation,
               },
             };
           });
@@ -180,9 +188,7 @@ export default function App() {
         reconnectRef.current = window.setTimeout(connect, 3000);
       };
 
-      socket.onerror = () => {
-        socket.close();
-      };
+      socket.onerror = () => socket.close();
     };
 
     connect();
@@ -199,8 +205,8 @@ export default function App() {
   const incidentList = useMemo(
     () =>
       Object.values(incidents).sort((a, b) => {
-        const left = a.attack?.timestamp || "";
-        const right = b.attack?.timestamp || "";
+        const left = a.simulation?.timestamp || "";
+        const right = b.simulation?.timestamp || "";
         return right.localeCompare(left);
       }),
     [incidents]
@@ -213,7 +219,7 @@ export default function App() {
       total: values.length,
       pending: values.filter((incident) => incident.approval_status === "pending").length,
       mitigated: values.filter((incident) => incident.action_result?.status === "MITIGATED").length,
-      critical: values.filter((incident) => incident.attack?.severity === "CRITICAL").length,
+      critical: values.filter((incident) => incident.classification?.attack?.severity === "CRITICAL").length,
     };
   }, [incidents]);
 
@@ -246,41 +252,23 @@ export default function App() {
     }
   }
 
+  const attack = selected?.classification?.attack;
+
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: colors.background,
-        color: colors.text,
-        fontFamily:
-          'ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif',
-        padding: 24,
-        boxSizing: "border-box",
-      }}
-    >
+    <div style={pageStyle}>
       <div style={{ maxWidth: 1480, margin: "0 auto" }}>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "flex-start",
-            gap: 16,
-            flexWrap: "wrap",
-            marginBottom: 20,
-          }}
-        >
+        <div style={headerStyle}>
           <div>
-            <div style={{ color: colors.subtleText, fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Dashboard</div>
+            <div style={eyebrowStyle}>Dashboard</div>
             <div style={{ fontSize: 34, fontWeight: 700, letterSpacing: -0.8, marginBottom: 6 }}>CyberAgent</div>
-            <div style={{ color: colors.secondaryText, maxWidth: 640, lineHeight: 1.6 }}>
-              Multi-agent incident orchestration with attack generation, detection, approval gates, and report
-              generation.
+            <div style={{ color: colors.secondaryText, maxWidth: 760, lineHeight: 1.6 }}>
+              Log-driven red team and blue team workflow with monitoring, anomaly detection, classification, planning,
+              execution, and reporting.
             </div>
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <StatusPill color={connected ? colors.green : colors.red}>
-              <span style={{ fontSize: 10 }}>{connected ? "●" : "●"}</span>
               {connected ? "Live" : "Offline"}
             </StatusPill>
             <button onClick={simulateAttack} style={primaryButtonStyle}>
@@ -292,53 +280,20 @@ export default function App() {
           </div>
         </div>
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-            gap: 12,
-            marginBottom: 20,
-          }}
-        >
+        <div style={statsGridStyle}>
           <StatCard label="Total incidents" value={stats.total} />
           <StatCard label="Pending approval" value={stats.pending} />
           <StatCard label="Mitigated" value={stats.mitigated} />
           <StatCard label="Critical" value={stats.critical} />
         </div>
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "320px minmax(0, 1fr)",
-            gap: 20,
-            minHeight: "calc(100vh - 210px)",
-          }}
-        >
-          <aside
-            style={{
-              background: colors.page,
-              border: `1px solid ${colors.border}`,
-              borderRadius: 12,
-              padding: 14,
-              display: "flex",
-              flexDirection: "column",
-              gap: 14,
-              minHeight: 0,
-            }}
-          >
-            <div style={{ minHeight: 0, flex: 1, display: "flex", flexDirection: "column" }}>
+        <div style={mainGridStyle}>
+          <aside style={sidebarStyle}>
+            <div style={sidebarPanelStyle}>
               <div style={sidebarTitleStyle}>Live feed</div>
-              <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, paddingRight: 2 }}>
+              <div style={scrollListStyle}>
                 {feed.map((entry) => (
-                  <div
-                    key={entry.id}
-                    style={{
-                      background: colors.card,
-                      border: `1px solid ${colors.border}`,
-                      borderRadius: 10,
-                      padding: 12,
-                    }}
-                  >
+                  <div key={entry.id} style={feedCardStyle}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 6 }}>
                       <span style={{ color: colors.text, fontSize: 12, fontWeight: 600 }}>{entry.type}</span>
                       <span style={{ color: colors.subtleText, fontSize: 11 }}>{formatTime(entry.timestamp)}</span>
@@ -351,37 +306,37 @@ export default function App() {
               </div>
             </div>
 
-            <div style={{ minHeight: 0, flex: 1, display: "flex", flexDirection: "column" }}>
+            <div style={sidebarPanelStyle}>
               <div style={sidebarTitleStyle}>Incidents</div>
-              <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, paddingRight: 2 }}>
+              <div style={scrollListStyle}>
                 {incidentList.map((incident) => {
-                  const attack = incident.attack || {};
+                  const simulation = incident.simulation || {};
                   const meta = stageMeta[incident.current_stage] || stageMeta.red_team_attacking;
+                  const severity = incident.classification?.attack?.severity || simulation.attack_profile?.severity;
                   return (
                     <button
-                      key={attack.attack_id}
-                      onClick={() => setSelectedId(attack.attack_id)}
+                      key={simulation.attack_id}
+                      onClick={() => setSelectedId(simulation.attack_id)}
                       style={{
-                        textAlign: "left",
-                        border: `1px solid ${selectedId === attack.attack_id ? "#d8d8d2" : colors.border}`,
-                        borderRadius: 10,
-                        padding: 12,
-                        cursor: "pointer",
-                        background: selectedId === attack.attack_id ? colors.mutedCard : colors.card,
-                        color: colors.text,
+                        ...incidentCardStyle,
+                        background: selectedId === simulation.attack_id ? colors.mutedCard : colors.card,
                       }}
                     >
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 8 }}>
-                        <div style={{ fontWeight: 650 }}>{attack.attack_id}</div>
-                        <StatusPill color={severityColors[attack.severity] || colors.gray}>
-                          {attack.severity}
-                        </StatusPill>
+                        <div style={{ fontWeight: 650 }}>{simulation.attack_id}</div>
+                        {severity ? (
+                          <StatusPill color={severityColors[severity] || colors.gray}>{severity}</StatusPill>
+                        ) : null}
                       </div>
-                      <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>{attack.attack_type}</div>
+                      <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>
+                        {incident.classification?.predicted_class || simulation.attack_profile?.attack_type || "Pending"}
+                      </div>
                       <div style={{ color: colors.secondaryText, fontSize: 12, marginBottom: 4 }}>
                         {meta.icon} {meta.label}
                       </div>
-                      <div style={{ color: colors.subtleText, fontSize: 12 }}>{attack.primary_src_ip}</div>
+                      <div style={{ color: colors.subtleText, fontSize: 12 }}>
+                        {incident.anomaly?.primary_src_ip || simulation.attack_profile?.primary_src_ip || "Waiting"}
+                      </div>
                     </button>
                   );
                 })}
@@ -391,64 +346,89 @@ export default function App() {
 
           <main style={{ minWidth: 0 }}>
             {!selected ? (
-              <div
-                style={{
-                  minHeight: "100%",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  border: `1px solid ${colors.border}`,
-                  borderRadius: 12,
-                  background: colors.page,
-                }}
-              >
-                <div style={{ textAlign: "center" }}>
-                  <div style={{ color: colors.subtleText, fontSize: 14, marginBottom: 8 }}>No incident selected</div>
-                  <div style={{ fontSize: 28, fontWeight: 650 }}>Choose an incident from the sidebar</div>
-                </div>
+              <div style={emptyStateStyle}>
+                <div style={{ color: colors.subtleText, fontSize: 14, marginBottom: 8 }}>No incident selected</div>
+                <div style={{ fontSize: 28, fontWeight: 650 }}>Choose an incident from the sidebar</div>
               </div>
             ) : (
               <>
-                <Section title={selected.attack.attack_type} eyebrow="Red Team Agent">
+                <Section title="Red Team Agent" eyebrow="Raw telemetry generation">
                   <div style={detailGridStyle}>
-                    <Detail label="Attack type" value={selected.attack.attack_type} />
-                    <Detail label="Target" value={`${selected.attack.target_ip}:${selected.attack.target_port}`} />
-                    <Detail label="Packet rate" value={`${selected.attack.packet_rate}/sec`} />
-                    <Detail label="Protocol" value={selected.attack.protocol} />
-                  </div>
-                  <div style={bodyRowStyle}>
-                    <span style={bodyLabelStyle}>Source IPs</span>
-                    <span>{selected.attack.src_ips.join(", ")}</span>
+                    <Detail label="Scenario" value={selected.simulation.attack_profile.attack_type} />
+                    <Detail label="Primary source" value={selected.simulation.attack_profile.primary_src_ip} />
+                    <Detail
+                      label="Target"
+                      value={`${selected.simulation.attack_profile.target_ip}:${selected.simulation.attack_profile.target_port}`}
+                    />
+                    <Detail label="Expected rate" value={`${selected.simulation.attack_profile.packet_rate}/sec`} />
                   </div>
                   <div style={bodyRowStyle}>
                     <span style={bodyLabelStyle}>Description</span>
-                    <span>{selected.attack.description}</span>
+                    <span>{selected.simulation.description}</span>
                   </div>
-                  <div style={monoBoxStyle}>{selected.attack.raw_log}</div>
+                  <LogBlock title="Access log samples" lines={selected.simulation.telemetry.generated_logs.access} />
+                  <LogBlock title="Auth log samples" lines={selected.simulation.telemetry.generated_logs.auth} />
+                  <LogBlock title="Network log samples" lines={selected.simulation.telemetry.generated_logs.network} />
                 </Section>
 
-                {selected.classification && (
-                  <Section title="Threat Detection Agent" eyebrow="Classification">
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        gap: 18,
-                        flexWrap: "wrap",
-                        marginBottom: 18,
-                      }}
-                    >
+                {selected.telemetry && (
+                  <Section title="Log Monitor Agent" eyebrow="Continuous monitoring">
+                    <div style={detailGridStyle}>
+                      <Detail label="Total logs observed" value={selected.telemetry.total_logs_observed} />
+                      <Detail label="Access logs" value={selected.telemetry.log_counts.access} />
+                      <Detail label="Auth logs" value={selected.telemetry.log_counts.auth} />
+                      <Detail label="Network logs" value={selected.telemetry.log_counts.network} />
+                    </div>
+                    <div style={{ marginTop: 16 }}>
+                      <div style={subsectionTitleStyle}>Monitored log files</div>
+                      {Object.entries(selected.telemetry.log_paths).map(([name, path]) => (
+                        <div key={name} style={tableRowStyle}>
+                          <div style={tableLabelStyle}>{name}</div>
+                          <div>{path}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </Section>
+                )}
+
+                {selected.anomaly && (
+                  <Section title="Anomaly Detection Agent" eyebrow="Evidence from telemetry">
+                    <div style={detailGridStyle}>
+                      <Detail label="Anomaly type" value={selected.anomaly.anomaly_type} />
+                      <Detail label="Primary source" value={selected.anomaly.primary_src_ip} />
+                      <Detail
+                        label="Target"
+                        value={`${selected.anomaly.target_ip}:${selected.anomaly.target_port}`}
+                      />
+                      <Detail label="Severity" value={selected.anomaly.severity} accent={severityColors[selected.anomaly.severity]} />
+                    </div>
+                    <div style={bodyRowStyle}>
+                      <span style={bodyLabelStyle}>Summary</span>
+                      <span>{selected.anomaly.summary}</span>
+                    </div>
+                    <div style={detailGridStyleWithMargin}>
+                      <Detail label="Request burst" value={selected.anomaly.request_burst} />
+                      <Detail label="Failed auth attempts" value={selected.anomaly.failed_auth_attempts} />
+                      <Detail label="Ports touched" value={selected.anomaly.port_span} />
+                      <Detail label="Packets observed" value={selected.anomaly.total_packets_observed} />
+                    </div>
+                    <LogBlock title="Sample access telemetry" lines={selected.anomaly.sample_logs.access} />
+                    <LogBlock title="Sample auth telemetry" lines={selected.anomaly.sample_logs.auth} />
+                    <LogBlock title="Sample network telemetry" lines={selected.anomaly.sample_logs.network} />
+                  </Section>
+                )}
+
+                {selected.classification && attack && (
+                  <Section title="Classification Agent" eyebrow="Incident structuring">
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 18, flexWrap: "wrap", marginBottom: 18 }}>
                       <div>
-                        <div style={{ color: colors.subtleText, fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
-                          Predicted class
-                        </div>
-                        <div style={{ color: colors.text, fontSize: 28, fontWeight: 700 }}>
-                          {selected.classification.predicted_class}
-                        </div>
+                        <div style={eyebrowStyle}>Predicted attack type</div>
+                        <div style={{ color: colors.text, fontSize: 28, fontWeight: 700 }}>{selected.classification.predicted_class}</div>
                       </div>
                       <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
                         <Detail label="Confidence" value={`${(selected.classification.confidence * 100).toFixed(1)}%`} />
                         <Detail label="Risk score" value={selected.classification.risk_score} accent={colors.amber} />
+                        <Detail label="Correlated sources" value={attack.src_ips.length} />
                       </div>
                     </div>
 
@@ -459,20 +439,12 @@ export default function App() {
                             <span style={{ fontSize: 14, fontWeight: 600 }}>{label}</span>
                             <span style={{ color: colors.secondaryText, fontSize: 13 }}>{(value * 100).toFixed(1)}%</span>
                           </div>
-                          <div
-                            style={{
-                              background: colors.mutedCard,
-                              borderRadius: 999,
-                              height: 8,
-                              overflow: "hidden",
-                            }}
-                          >
+                          <div style={barTrackStyle}>
                             <div
                               style={{
                                 width: `${value * 100}%`,
                                 height: "100%",
-                                background:
-                                  label === selected.classification.predicted_class ? colors.text : "#cfcfca",
+                                background: label === selected.classification.predicted_class ? colors.text : "#cfcfca",
                               }}
                             />
                           </div>
@@ -480,7 +452,14 @@ export default function App() {
                       ))}
                     </div>
 
-                    <div style={{ color: colors.secondaryText, lineHeight: 1.7 }}>
+                    <div style={detailGridStyle}>
+                      <Detail label="Primary source" value={attack.primary_src_ip} />
+                      <Detail label="Target" value={`${attack.target_ip}:${attack.target_port}`} />
+                      <Detail label="Protocol" value={attack.protocol} />
+                      <Detail label="Estimated packet rate" value={`${attack.packet_rate}/sec`} />
+                    </div>
+
+                    <div style={{ color: colors.secondaryText, lineHeight: 1.7, marginTop: 16 }}>
                       {selected.classification.key_indicators.map((item) => (
                         <div key={item} style={{ marginBottom: 8 }}>
                           • {item}
@@ -491,36 +470,17 @@ export default function App() {
                 )}
 
                 {selected.mitigation_plan && (
-                  <Section title="Threat Resolve Agent" eyebrow="Gemini generated plan">
+                  <Section title="Response Planning Agent" eyebrow="Gemini generated plan">
                     <div style={detailGridStyle}>
                       <Detail label="Strategy" value={selected.mitigation_plan.strategy} />
-                      <Detail
-                        label="Estimated mitigation time"
-                        value={selected.mitigation_plan.estimated_mitigation_time}
-                      />
+                      <Detail label="Estimated time" value={selected.mitigation_plan.estimated_mitigation_time} />
                       <Detail label="Collateral risk" value={selected.mitigation_plan.collateral_risk} accent={colors.amber} />
                     </div>
 
                     <div style={{ display: "grid", gap: 12, marginTop: 18 }}>
                       {selected.mitigation_plan.steps.map((step) => (
-                        <div
-                          key={`${step.step}-${step.action}`}
-                          style={{
-                            border: `1px solid ${colors.border}`,
-                            borderRadius: 10,
-                            padding: 14,
-                            background: colors.page,
-                          }}
-                        >
-                          <div
-                            style={{
-                              display: "flex",
-                              justifyContent: "space-between",
-                              gap: 12,
-                              flexWrap: "wrap",
-                              marginBottom: 10,
-                            }}
-                          >
+                        <div key={`${step.step}-${step.action}`} style={stepCardStyle}>
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 10 }}>
                             <div style={{ fontWeight: 650 }}>
                               {step.step}. {step.action}
                             </div>
@@ -535,30 +495,22 @@ export default function App() {
                     </div>
 
                     {selected.approval_status === "pending" && (
-                      <div
-                        style={{
-                          marginTop: 18,
-                          border: `1px solid ${colors.border}`,
-                          borderRadius: 10,
-                          padding: 14,
-                          background: colors.mutedCard,
-                        }}
-                      >
+                      <div style={approvalBoxStyle}>
                         <div style={{ color: colors.text, fontWeight: 600, marginBottom: 12 }}>
                           Awaiting administrator approval before execution.
                         </div>
                         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                           <button
-                            disabled={decisionLoading[selected.attack.attack_id]}
-                            onClick={() => submitDecision(selected.attack.attack_id, "approved")}
-                            style={approveButtonStyle(decisionLoading[selected.attack.attack_id])}
+                            disabled={decisionLoading[selected.simulation.attack_id]}
+                            onClick={() => submitDecision(selected.simulation.attack_id, "approved")}
+                            style={approveButtonStyle(decisionLoading[selected.simulation.attack_id])}
                           >
                             Approve
                           </button>
                           <button
-                            disabled={decisionLoading[selected.attack.attack_id]}
-                            onClick={() => submitDecision(selected.attack.attack_id, "rejected")}
-                            style={rejectButtonStyle(decisionLoading[selected.attack.attack_id])}
+                            disabled={decisionLoading[selected.simulation.attack_id]}
+                            onClick={() => submitDecision(selected.simulation.attack_id, "rejected")}
+                            style={rejectButtonStyle(decisionLoading[selected.simulation.attack_id])}
                           >
                             Reject
                           </button>
@@ -569,22 +521,16 @@ export default function App() {
                 )}
 
                 {selected.action_result && (
-                  <Section title="Action Agent" eyebrow="Execution">
+                  <Section title="Action Agent" eyebrow="Execution result">
                     <div style={{ marginBottom: 16 }}>
-                      <StatusPill
-                        color={selected.action_result.status === "MITIGATED" ? colors.green : colors.gray}
-                      >
+                      <StatusPill color={selected.action_result.status === "MITIGATED" ? colors.green : colors.gray}>
                         {selected.action_result.status}
                       </StatusPill>
                     </div>
-
                     {selected.action_result.status === "MITIGATED" ? (
                       <div style={detailGridStyle}>
                         <Detail label="Steps executed" value={selected.action_result.steps_executed.length} />
-                        <Detail
-                          label="Total execution time"
-                          value={`${selected.action_result.total_execution_time_ms} ms`}
-                        />
+                        <Detail label="Execution time" value={`${selected.action_result.total_execution_time_ms} ms`} />
                         <Detail label="Blocked IPs" value={selected.action_result.blocked_ips.join(", ")} />
                       </div>
                     ) : (
@@ -597,19 +543,8 @@ export default function App() {
                 )}
 
                 {selected.incident_report && (
-                  <Section title="Incident Report" eyebrow="Gemini generated">
-                    <div
-                      style={{
-                        border: `1px solid ${colors.border}`,
-                        borderRadius: 10,
-                        padding: 16,
-                        background: colors.page,
-                        lineHeight: 1.7,
-                        marginBottom: 18,
-                      }}
-                    >
-                      {selected.incident_report.executive_summary}
-                    </div>
+                  <Section title="Reporting Agent" eyebrow="Gemini generated report">
+                    <div style={reportSummaryStyle}>{selected.incident_report.executive_summary}</div>
 
                     <div style={{ marginBottom: 18 }}>
                       <div style={subsectionTitleStyle}>Attack summary</div>
@@ -653,6 +588,90 @@ export default function App() {
     </div>
   );
 }
+
+const pageStyle = {
+  minHeight: "100vh",
+  background: colors.background,
+  color: colors.text,
+  fontFamily: 'ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif',
+  padding: 24,
+  boxSizing: "border-box",
+};
+
+const headerStyle = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "flex-start",
+  gap: 16,
+  flexWrap: "wrap",
+  marginBottom: 20,
+};
+
+const statsGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+  gap: 12,
+  marginBottom: 20,
+};
+
+const mainGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "320px minmax(0, 1fr)",
+  gap: 20,
+  minHeight: "calc(100vh - 210px)",
+};
+
+const sidebarStyle = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 14,
+  minHeight: 0,
+};
+
+const sidebarPanelStyle = {
+  background: colors.page,
+  border: `1px solid ${colors.border}`,
+  borderRadius: 12,
+  padding: 14,
+  display: "flex",
+  flexDirection: "column",
+  minHeight: 0,
+  flex: 1,
+};
+
+const scrollListStyle = {
+  overflowY: "auto",
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+  paddingRight: 2,
+};
+
+const feedCardStyle = {
+  background: colors.card,
+  border: `1px solid ${colors.border}`,
+  borderRadius: 10,
+  padding: 12,
+};
+
+const incidentCardStyle = {
+  textAlign: "left",
+  border: `1px solid ${colors.border}`,
+  borderRadius: 10,
+  padding: 12,
+  cursor: "pointer",
+  color: colors.text,
+};
+
+const emptyStateStyle = {
+  minHeight: "100%",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  border: `1px solid ${colors.border}`,
+  borderRadius: 12,
+  background: colors.page,
+};
 
 const primaryButtonStyle = {
   border: "none",
@@ -700,16 +719,37 @@ function rejectButtonStyle(disabled) {
   };
 }
 
+const statCardStyle = {
+  background: colors.card,
+  border: `1px solid ${colors.border}`,
+  borderRadius: 12,
+  padding: "16px 18px",
+};
+
 const sidebarTitleStyle = {
   color: colors.text,
   fontWeight: 650,
   marginBottom: 10,
 };
 
+const eyebrowStyle = {
+  color: colors.subtleText,
+  fontSize: 12,
+  fontWeight: 600,
+  marginBottom: 6,
+};
+
 const detailGridStyle = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
   gap: 16,
+};
+
+const detailGridStyleWithMargin = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+  gap: 16,
+  marginTop: 16,
 };
 
 const bodyRowStyle = {
@@ -727,7 +767,7 @@ const bodyLabelStyle = {
 };
 
 const monoBoxStyle = {
-  marginTop: 14,
+  marginTop: 10,
   background: "#fafaf9",
   border: `1px solid ${colors.border}`,
   borderRadius: 10,
@@ -759,4 +799,35 @@ const tableLabelStyle = {
   color: colors.subtleText,
   textTransform: "capitalize",
   fontWeight: 600,
+};
+
+const barTrackStyle = {
+  background: colors.mutedCard,
+  borderRadius: 999,
+  height: 8,
+  overflow: "hidden",
+};
+
+const stepCardStyle = {
+  border: `1px solid ${colors.border}`,
+  borderRadius: 10,
+  padding: 14,
+  background: colors.page,
+};
+
+const approvalBoxStyle = {
+  marginTop: 18,
+  border: `1px solid ${colors.border}`,
+  borderRadius: 10,
+  padding: 14,
+  background: colors.mutedCard,
+};
+
+const reportSummaryStyle = {
+  border: `1px solid ${colors.border}`,
+  borderRadius: 10,
+  padding: 16,
+  background: colors.page,
+  lineHeight: 1.7,
+  marginBottom: 18,
 };

@@ -1,13 +1,18 @@
 import asyncio
 from contextlib import suppress
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from agents import action_graph, detection_graph
-from red_team import generate_attack
+from red_team import simulate_attack
 
+
+BASE_DIR = Path(__file__).resolve().parent
+RUNTIME_LOG_DIR = BASE_DIR / "runtime_logs"
+RUNTIME_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="CyberAgent API")
 app.add_middleware(
@@ -29,8 +34,8 @@ class ApprovalRequest(BaseModel):
 
 
 async def broadcast(event_type: str, data: dict):
-    dead_clients = []
     payload = {"type": event_type, "data": data}
+    dead_clients = []
     for client in list(connected_clients):
         try:
             await client.send_json(payload)
@@ -42,10 +47,12 @@ async def broadcast(event_type: str, data: dict):
 
 
 async def _run_detection_pipeline():
-    attack = generate_attack()
-    attack_id = attack["attack_id"]
+    simulation = simulate_attack(str(RUNTIME_LOG_DIR))
+    attack_id = simulation["attack_id"]
     initial_state = {
-        "attack": attack,
+        "simulation": simulation,
+        "telemetry": None,
+        "anomaly": None,
         "classification": None,
         "mitigation_plan": None,
         "approval_status": None,
@@ -57,21 +64,22 @@ async def _run_detection_pipeline():
     await broadcast(
         "red_team_attack",
         {
-            **initial_state,
             "attack_id": attack_id,
+            "simulation": simulation,
             "current_stage": "red_team_attacking",
+            "message": "Red Team Agent generated raw access, auth, and network telemetry.",
         },
     )
-    await asyncio.sleep(1.5)
+    await asyncio.sleep(0.8)
     await broadcast(
         "agent_update",
         {
             "attack_id": attack_id,
-            "current_stage": "threat_detection",
-            "message": "Threat Detection Agent analyzing incident telemetry...",
+            "current_stage": "log_monitoring",
+            "message": "Log Monitor Agent is collecting fresh access, auth, and network logs.",
         },
     )
-    await asyncio.sleep(1.0)
+    await asyncio.sleep(0.8)
 
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, detection_graph.invoke, initial_state)
@@ -80,12 +88,32 @@ async def _run_detection_pipeline():
         "agent_update",
         {
             "attack_id": attack_id,
-            "classification": result.get("classification"),
-            "current_stage": "classified",
-            "message": "Threat Detection Agent classified the malicious activity.",
+            "telemetry": result.get("telemetry"),
+            "current_stage": "log_monitoring",
+            "message": "Log Monitor Agent ingested recent telemetry from the monitored log files.",
         },
     )
-    await asyncio.sleep(1.0)
+    await asyncio.sleep(0.8)
+    await broadcast(
+        "agent_update",
+        {
+            "attack_id": attack_id,
+            "anomaly": result.get("anomaly"),
+            "current_stage": "anomaly_detected",
+            "message": "Anomaly Detection Agent flagged suspicious behavior from the monitored logs.",
+        },
+    )
+    await asyncio.sleep(0.8)
+    await broadcast(
+        "agent_update",
+        {
+            "attack_id": attack_id,
+            "classification": result.get("classification"),
+            "current_stage": "classified",
+            "message": "Classification Agent converted anomaly evidence into a structured incident.",
+        },
+    )
+    await asyncio.sleep(0.8)
     await broadcast(
         "agent_update",
         {
@@ -93,7 +121,7 @@ async def _run_detection_pipeline():
             "mitigation_plan": result.get("mitigation_plan"),
             "approval_status": result.get("approval_status"),
             "current_stage": "awaiting_approval",
-            "message": "Gemini generated mitigation plan — awaiting admin approval",
+            "message": "Response Planning Agent generated a mitigation plan — awaiting admin approval.",
         },
     )
 
@@ -171,7 +199,7 @@ async def approve_incident(incident_id: str, body: ApprovalRequest):
             "attack_id": incident_id,
             "approval_status": body.decision,
             "current_stage": "action_executing",
-            "message": "Action Agent executing approved response workflow.",
+            "message": "Action Agent is applying the approved response path.",
         },
     )
     await asyncio.sleep(0.8)
@@ -188,7 +216,7 @@ async def approve_incident(incident_id: str, body: ApprovalRequest):
             "current_stage": final_state.get("current_stage"),
             "action_result": final_state.get("action_result"),
             "incident_report": final_state.get("incident_report"),
-            "message": "Gemini generated incident report",
+            "message": "Reporting Agent generated the incident report.",
         },
     )
     return final_state

@@ -1,11 +1,21 @@
 # CyberAgent — Multi-Agent Cybersecurity Orchestration
 
 ## Architecture
-Red Team Agent → Threat Detection Agent → Threat Resolve Agent (Gemini)
-                                                 ↓
-                                      Human Approval (Dashboard)
-                                                 ↓
-                              Action Agent → Incident Report (Gemini)
+Red Team Agent (writes raw logs)
+        ↓
+Log Monitor Agent
+        ↓
+Anomaly Detection Agent
+        ↓
+Classification Agent
+        ↓
+Response Planning Agent (Gemini)
+        ↓
+Human Approval (Dashboard)
+        ↓
+Action Agent
+        ↓
+Reporting Agent (Gemini)
 
 ## Setup
 
@@ -34,9 +44,11 @@ API: [http://localhost:8000](http://localhost:8000)
 
 ## Demo Flow
 1. Click `SIMULATE ATTACK`
-2. Red Team generates attack
-3. Threat Detection classifies the incident
-4. Gemini generates dynamic mitigation plan
-5. Admin approves or rejects on dashboard
-6. Action Agent executes response
-7. Gemini writes incident report
+2. Red Team writes synthetic access, auth, and network log entries
+3. Log Monitor Agent reads the latest telemetry from monitored log files
+4. Anomaly Detection Agent flags suspicious behavior
+5. Classification Agent converts that evidence into a structured incident
+6. Gemini generates a mitigation plan
+7. Admin approves or rejects on dashboard
+8. Action Agent executes or escalates
+9. Gemini writes the final incident report
