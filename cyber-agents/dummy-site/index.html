@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#10203a" />
+    <meta
+      name="description"
+      content="NovaCart demo customer website integrated with CyberAgent collector ingestion."
+    />
+    <title>NovaCart Demo Site</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <aside class="setup-panel">
+        <div class="eyebrow">Customer Integration</div>
+        <h1>NovaCart Demo Site</h1>
+        <p class="muted">
+          This standalone startup website sends real collector telemetry into CyberAgent using your project token.
+        </p>
+
+        <label>
+          <span>CyberAgent API Base</span>
+          <input id="apiBase" type="text" value="http://localhost:8000" />
+        </label>
+
+        <label>
+          <span>Collector Token</span>
+          <input id="collectorToken" type="text" placeholder="Paste the token from the dashboard" />
+        </label>
+
+        <label>
+          <span>Source Label</span>
+          <input id="sourceLabel" type="text" value="NovaCart production collector" />
+        </label>
+
+        <div class="button-row">
+          <button id="saveConfigBtn" class="primary-btn">Save config</button>
+          <button id="sendHealthBtn" class="secondary-btn">Send healthy traffic</button>
+        </div>
+
+        <div class="status-card">
+          <div class="status-label">Collector status</div>
+          <div id="collectorStatus" class="status-value">Waiting for configuration</div>
+        </div>
+
+        <div class="code-card">
+          <div class="code-title">What this site does</div>
+          <ul>
+            <li>Sends `access`, `auth`, and `network` events to `/collector/ingest`</li>
+            <li>Uses `X-Collector-Token` to identify the protected project</li>
+            <li>Triggers CyberAgent detections for attack scenarios</li>
+          </ul>
+        </div>
+      </aside>
+
+      <main class="site-canvas">
+        <header class="hero">
+          <div class="brand-line">
+            <div class="brand-mark">N</div>
+            <div>
+              <div class="brand-name">NovaCart</div>
+              <div class="brand-subtitle">Demo startup storefront monitored by CyberAgent</div>
+            </div>
+          </div>
+          <nav class="nav-links">
+            <a href="#products">Products</a>
+            <a href="#pricing">Pricing</a>
+            <a href="#admin">Admin</a>
+          </nav>
+        </header>
+
+        <section class="hero-card">
+          <div>
+            <div class="eyebrow light">Protected Website</div>
+            <h2>Real customer-side actions, real collector telemetry, real SOC detections.</h2>
+            <p>
+              Use this website in one tab and the CyberAgent dashboard in another. Every action below sends collector
+              events to your platform, so your demo feels like a proper SaaS integration instead of a single-page mock.
+            </p>
+            <div class="button-row">
+              <button id="browseBtn" class="accent-btn">Browse products</button>
+              <button id="checkoutBtn" class="secondary-site-btn">Checkout flow</button>
+            </div>
+          </div>
+          <div class="stat-stack">
+            <div class="site-stat">
+              <span>Traffic source</span>
+              <strong>Web access logs</strong>
+            </div>
+            <div class="site-stat">
+              <span>Security source</span>
+              <strong>Auth + network flows</strong>
+            </div>
+            <div class="site-stat">
+              <span>Downstream system</span>
+              <strong>CyberAgent multi-agent SOC</strong>
+            </div>
+          </div>
+        </section>
+
+        <section id="products" class="product-grid">
+          <article class="product-card">
+            <div class="product-badge">Popular</div>
+            <h3>Telemetry Shield</h3>
+            <p>Startup-grade visibility with normalized app, auth, and network events.</p>
+            <button data-scenario="browse" class="ghost-btn">View product</button>
+          </article>
+          <article class="product-card">
+            <div class="product-badge">New</div>
+            <h3>Policy Guard</h3>
+            <p>Human-in-the-loop containment for risky production actions.</p>
+            <button data-scenario="browse" class="ghost-btn">View product</button>
+          </article>
+          <article class="product-card">
+            <div class="product-badge">For SOCs</div>
+            <h3>Agent Trace Pro</h3>
+            <p>Explainable agent timelines for demos, audits, and analysts.</p>
+            <button data-scenario="browse" class="ghost-btn">View product</button>
+          </article>
+        </section>
+
+        <section class="scenario-grid">
+          <article class="scenario-card">
+            <div class="eyebrow">Normal</div>
+            <h3>Healthy customer traffic</h3>
+            <p>Generate normal browsing and checkout events without opening an incident.</p>
+            <button data-scenario="healthy" class="secondary-site-btn">Send normal traffic</button>
+          </article>
+          <article class="scenario-card">
+            <div class="eyebrow">Attack 1</div>
+            <h3>Failed admin logins</h3>
+            <p>Send a brute-force style authentication burst from one hostile source.</p>
+            <button data-scenario="bruteforce" class="warning-btn">Simulate brute force</button>
+          </article>
+          <article class="scenario-card">
+            <div class="eyebrow">Attack 2</div>
+            <h3>Sensitive path recon</h3>
+            <p>Probe `/admin`, `/.env`, and other risky paths to trigger reconnaissance detection.</p>
+            <button data-scenario="recon" class="warning-btn">Simulate recon</button>
+          </article>
+          <article class="scenario-card">
+            <div class="eyebrow">Attack 3</div>
+            <h3>Traffic spike</h3>
+            <p>Generate a DDoS-like burst with many access and network events.</p>
+            <button data-scenario="traffic" class="danger-btn">Simulate traffic spike</button>
+          </article>
+        </section>
+
+        <section id="admin" class="admin-grid">
+          <div class="admin-card">
+            <div class="eyebrow">Customer login</div>
+            <h3>Secure sign-in</h3>
+            <p>Normal login attempts send benign access events into CyberAgent.</p>
+            <form id="customerLoginForm" class="form-stack">
+              <input id="customerEmail" type="email" placeholder="customer@novacart.io" />
+              <input id="customerPassword" type="password" placeholder="password" />
+              <button type="submit" class="accent-btn">Login as customer</button>
+            </form>
+          </div>
+
+          <div class="admin-card">
+            <div class="eyebrow">Admin portal</div>
+            <h3>Restricted administrator access</h3>
+            <p>Use this to show how suspicious failed admin logins become a brute-force incident.</p>
+            <form id="adminLoginForm" class="form-stack">
+              <input id="adminUser" type="text" placeholder="admin" />
+              <input id="adminPassword" type="password" placeholder="wrong-password" />
+              <button type="submit" class="danger-btn">Attempt admin login</button>
+            </form>
+          </div>
+        </section>
+
+        <section class="activity-card">
+          <div class="activity-header">
+            <div>
+              <div class="eyebrow">Local activity log</div>
+              <h3>Collector actions from this website</h3>
+            </div>
+            <button id="clearLogBtn" class="ghost-btn">Clear log</button>
+          </div>
+          <div id="activityLog" class="activity-log"></div>
+        </section>
+      </main>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+  </html>

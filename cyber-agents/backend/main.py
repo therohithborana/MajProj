@@ -1,23 +1,20 @@
 import asyncio
 from contextlib import suppress
-from pathlib import Path
+from datetime import datetime, timezone
+import uuid
 
 from bson import ObjectId
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from agents import action_graph, detection_graph
-from auth import require_user
+from auth import require_collector, require_user
 from db import db, init_db
-from models import ApprovalRequest, serialize_document, utc_now
+from models import ApprovalRequest, CollectorIngestRequest, serialize_document, utc_now
 from red_team import simulate_attack
 from routes.auth import router as auth_router
 from routes.websites import router as websites_router
 
-
-BASE_DIR = Path(__file__).resolve().parent
-RUNTIME_LOG_DIR = BASE_DIR / "runtime_logs"
-RUNTIME_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="CyberAgent API")
 app.add_middleware(
@@ -38,6 +35,18 @@ connected_clients = []
 attack_running = False
 auto_task = None
 auto_website_id = None
+
+STAGE_MESSAGES = {
+    "normalization": "Normalization Agent converted raw collector telemetry into a shared event schema.",
+    "detection": "Detection Agent evaluated rules across access, auth, and network data.",
+    "correlation": "Correlation Agent linked the evidence into one attack storyline.",
+    "classification": "Threat Classification Agent estimated the attack type and risk.",
+    "investigation": "Investigation Agent prepared the attacker profile and timeline.",
+    "response_planning": "Response Planning Agent drafted containment and remediation steps.",
+    "policy_decision": "Policy Agent decided whether the incident can be auto-executed or needs approval.",
+    "action": "Action Agent executed the approved response path.",
+    "report": "Reporting Agent generated the final incident report.",
+}
 
 
 async def broadcast(event_type: str, data: dict):
@@ -64,15 +73,20 @@ def _persist_incident(website_id: str, state: dict):
     document = {
         "website_id": website_id,
         "attack_id": attack_id,
+        "incident_id": attack_id,
         "current_stage": state.get("current_stage"),
         "simulation": state.get("simulation"),
         "telemetry": state.get("telemetry"),
         "anomaly": state.get("anomaly"),
+        "correlation": state.get("correlation"),
         "classification": state.get("classification"),
+        "investigation": state.get("investigation"),
         "mitigation_plan": state.get("mitigation_plan"),
+        "policy_decision": state.get("policy_decision"),
         "approval_status": state.get("approval_status"),
         "action_result": state.get("action_result"),
         "incident_report": state.get("incident_report"),
+        "agent_trace": state.get("agent_trace", []),
         "created_at": now,
         "updated_at": now,
     }
@@ -96,105 +110,222 @@ def _get_website_or_404(user_id: str, website_id: str):
     return serialize_document(website)
 
 
-async def _run_detection_pipeline(website: dict):
-    runtime_log_paths = ((website.get("dummy_site") or {}).get("runtime_log_paths")) or {}
-    if not runtime_log_paths:
-        raise HTTPException(status_code=400, detail="Website is not connected to a demo source")
+def _normalize_event(website: dict, attack_id: str | None, event: dict):
+    timestamp = event.get("timestamp") or utc_now().isoformat()
+    if isinstance(timestamp, datetime):
+        event_time = timestamp
+    else:
+        event_time = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+    return {
+        "website_id": website["_id"],
+        "user_id": website["user_id"],
+        "attack_id": attack_id,
+        "event_type": event.get("event_type"),
+        "timestamp": event_time,
+        "src_ip": event.get("src_ip"),
+        "dst_ip": event.get("dst_ip"),
+        "port": event.get("port"),
+        "protocol": event.get("protocol"),
+        "method": event.get("method"),
+        "path": event.get("path"),
+        "status_code": event.get("status_code"),
+        "username": event.get("username"),
+        "result": event.get("result"),
+        "bytes_sent": event.get("bytes_sent"),
+        "packets": event.get("packets"),
+        "flags": event.get("flags"),
+        "message": event.get("message"),
+        "metadata": event.get("metadata", {}),
+        "created_at": utc_now(),
+    }
 
-    simulation = simulate_attack(str(Path(runtime_log_paths["access"]).parent))
-    attack_id = simulation["attack_id"]
+
+def _store_events(website: dict, attack_id: str | None, events: list[dict]):
+    normalized = [_normalize_event(website, attack_id, event) for event in events]
+    if normalized:
+        db.events.insert_many(normalized)
+        sources_seen = sorted({event.get("src_ip") for event in normalized if event.get("src_ip")})[:25]
+        db.websites.update_one(
+            {"_id": ObjectId(website["_id"])},
+            {
+                "$set": {
+                    "telemetry_stats.events_ingested": db.events.count_documents({"website_id": website["_id"]}),
+                    "telemetry_stats.last_event_at": max(event["timestamp"] for event in normalized),
+                    "telemetry_stats.sources_seen": sources_seen,
+                    "collector.last_seen_at": utc_now(),
+                    "updated_at": utc_now(),
+                }
+            },
+        )
+    return normalized
+
+
+def _build_collector_simulation(website_id: str, attack_id: str, source_label: str | None):
+    events = _fetch_attack_events(website_id, attack_id)
+    description = f"Collector telemetry received from {source_label or 'customer website'}."
+    return {
+        "attack_id": attack_id,
+        "timestamp": events[0]["timestamp"] if events else utc_now().isoformat(),
+        "description": description,
+        "events": events,
+        "source": source_label or "collector_agent",
+    }
+
+
+def _fetch_attack_events(website_id: str, attack_id: str):
+    events = []
+    for document in db.events.find({"website_id": website_id, "attack_id": attack_id}).sort("timestamp", 1):
+        item = serialize_document(document)
+        item.pop("_id", None)
+        item.pop("user_id", None)
+        item.pop("website_id", None)
+        item.pop("created_at", None)
+        if isinstance(item.get("timestamp"), datetime):
+            item["timestamp"] = item["timestamp"].isoformat()
+        events.append(item)
+    return events
+
+
+async def _broadcast_trace(website_id: str, attack_id: str, state: dict):
+    for entry in state.get("agent_trace", []):
+        await broadcast(
+            "agent_update",
+            {
+                "attack_id": attack_id,
+                "website_id": website_id,
+                "current_stage": entry["stage"],
+                "message": entry["summary"],
+                "agent_trace_entry": entry,
+                "policy_decision": state.get("policy_decision"),
+            },
+        )
+        await asyncio.sleep(0.3)
+
+
+async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dict):
     initial_state = {
+        "website": website,
         "simulation": simulation,
         "telemetry": None,
         "anomaly": None,
+        "correlation": None,
         "classification": None,
+        "investigation": None,
         "mitigation_plan": None,
+        "policy_decision": None,
         "approval_status": None,
         "action_result": None,
         "incident_report": None,
-        "current_stage": "red_team_attacking",
+        "agent_trace": [],
+        "current_stage": "collector_ingested",
     }
 
     await broadcast(
-        "red_team_attack",
+        "collector_ingested",
         {
             "attack_id": attack_id,
             "website_id": website["_id"],
             "simulation": simulation,
-            "current_stage": "red_team_attacking",
-            "message": f"Red Team Agent generated telemetry for {website['name']}.",
+            "current_stage": "collector_ingested",
+            "message": "Collector Agent forwarded fresh telemetry into the platform.",
         },
     )
-    await asyncio.sleep(0.8)
-    await broadcast(
-        "agent_update",
-        {
-            "attack_id": attack_id,
-            "website_id": website["_id"],
-            "current_stage": "log_monitoring",
-            "message": "Log Monitor Agent is collecting fresh access, auth, and network logs.",
-        },
-    )
-    await asyncio.sleep(0.8)
 
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, detection_graph.invoke, initial_state)
     result["website_id"] = website["_id"]
 
-    await broadcast(
-        "agent_update",
-        {
-            "attack_id": attack_id,
-            "website_id": website["_id"],
-            "telemetry": result.get("telemetry"),
-            "current_stage": "log_monitoring",
-            "message": "Log Monitor Agent ingested recent telemetry from the monitored log files.",
-        },
-    )
-    await asyncio.sleep(0.8)
-    await broadcast(
-        "agent_update",
-        {
-            "attack_id": attack_id,
-            "website_id": website["_id"],
-            "anomaly": result.get("anomaly"),
-            "current_stage": "anomaly_detected",
-            "message": "Anomaly Detection Agent flagged suspicious behavior from the monitored logs.",
-        },
-    )
-    await asyncio.sleep(0.8)
-    await broadcast(
-        "agent_update",
-        {
-            "attack_id": attack_id,
-            "website_id": website["_id"],
-            "classification": result.get("classification"),
-            "current_stage": "classified",
-            "message": "Classification Agent converted anomaly evidence into a structured incident.",
-        },
-    )
-    await asyncio.sleep(0.8)
-    await broadcast(
-        "agent_update",
-        {
-            "attack_id": attack_id,
-            "website_id": website["_id"],
-            "mitigation_plan": result.get("mitigation_plan"),
-            "approval_status": result.get("approval_status"),
-            "current_stage": "awaiting_approval",
-            "message": "Response Planning Agent generated a mitigation plan — awaiting admin approval.",
-        },
-    )
+    await _broadcast_trace(website["_id"], attack_id, result)
 
     active_incidents[attack_id] = result
     _persist_incident(website["_id"], result)
+
+    if result.get("policy_decision", {}).get("mode") == "auto_execute":
+        await broadcast(
+            "agent_update",
+            {
+                "attack_id": attack_id,
+                "website_id": website["_id"],
+                "current_stage": "action",
+                "message": "Policy Agent auto-approved the response path. Action Agent is executing it now.",
+                "policy_decision": result.get("policy_decision"),
+            },
+        )
+        final_state = await loop.run_in_executor(
+            None,
+            action_graph.invoke,
+            {**result, "approval_status": "auto_approved"},
+        )
+        final_state["website_id"] = website["_id"]
+        active_incidents[attack_id] = final_state
+        _persist_incident(website["_id"], final_state)
+        await broadcast(
+            "incident_resolved",
+            {
+                "attack_id": attack_id,
+                "website_id": website["_id"],
+                "approval_status": final_state.get("approval_status"),
+                "current_stage": final_state.get("current_stage"),
+                "action_result": final_state.get("action_result"),
+                "incident_report": final_state.get("incident_report"),
+                "policy_decision": final_state.get("policy_decision"),
+                "agent_trace": final_state.get("agent_trace"),
+                "message": "Autonomous response completed and the incident report is ready.",
+            },
+        )
+    elif result.get("policy_decision", {}).get("mode") == "approval_required":
+        await broadcast(
+            "agent_update",
+            {
+                "attack_id": attack_id,
+                "website_id": website["_id"],
+                "current_stage": "awaiting_approval",
+                "message": "Policy Agent requires human approval before containment is executed.",
+                "policy_decision": result.get("policy_decision"),
+            },
+        )
+    else:
+        final_state = await loop.run_in_executor(
+            None,
+            action_graph.invoke,
+            {**result, "approval_status": "manual_required"},
+        )
+        final_state["website_id"] = website["_id"]
+        active_incidents[attack_id] = final_state
+        _persist_incident(website["_id"], final_state)
+        await broadcast(
+            "incident_resolved",
+            {
+                "attack_id": attack_id,
+                "website_id": website["_id"],
+                "approval_status": final_state.get("approval_status"),
+                "current_stage": final_state.get("current_stage"),
+                "action_result": final_state.get("action_result"),
+                "incident_report": final_state.get("incident_report"),
+                "policy_decision": final_state.get("policy_decision"),
+                "agent_trace": final_state.get("agent_trace"),
+                "message": "Incident was escalated for manual follow-up with a completed AI report.",
+            },
+        )
+
     return attack_id
 
 
 async def _auto_simulation_loop(website: dict):
     global attack_running
     while attack_running:
-        await _run_detection_pipeline(website)
+        scenario = simulate_attack()
+        attack_id = scenario["attack_id"]
+        _store_events(website, attack_id, scenario["events"])
+        simulation = {
+            "attack_id": attack_id,
+            "timestamp": scenario["timestamp"],
+            "description": scenario["description"],
+            "events": _fetch_attack_events(website["_id"], attack_id),
+            "attack_profile": scenario["attack_profile"],
+            "source": "demo_collector",
+        }
+        await _run_detection_pipeline(website, attack_id, simulation)
         for _ in range(15):
             if not attack_running:
                 break
@@ -226,10 +357,37 @@ async def websocket_endpoint(websocket: WebSocket):
             connected_clients.remove(websocket)
 
 
+@app.post("/collector/ingest")
+async def ingest_collector_events(payload: CollectorIngestRequest, website=Depends(require_collector)):
+    attack_id = payload.attack_id or (uuid.uuid4().hex[:8].upper() if payload.run_detection else None)
+    normalized_events = _store_events(website, attack_id, [event.model_dump() for event in payload.events])
+    if payload.run_detection and attack_id:
+        simulation = _build_collector_simulation(website["_id"], attack_id, payload.source_label)
+        await _run_detection_pipeline(website, attack_id, simulation)
+    return {
+        "status": "accepted",
+        "website_id": website["_id"],
+        "attack_id": attack_id,
+        "events_ingested": len(normalized_events),
+        "run_detection": payload.run_detection,
+    }
+
+
 @app.post("/websites/{website_id}/simulate")
 async def simulate_for_website(website_id: str, user=Depends(require_user)):
     website = _get_website_or_404(user["_id"], website_id)
-    attack_id = await _run_detection_pipeline(website)
+    scenario = simulate_attack()
+    attack_id = scenario["attack_id"]
+    _store_events(website, attack_id, scenario["events"])
+    simulation = {
+        "attack_id": attack_id,
+        "timestamp": scenario["timestamp"],
+        "description": scenario["description"],
+        "events": _fetch_attack_events(website["_id"], attack_id),
+        "attack_profile": scenario["attack_profile"],
+        "source": "demo_collector",
+    }
+    await _run_detection_pipeline(website, attack_id, simulation)
     return {"status": "pipeline_running", "incident_id": attack_id, "website_id": website_id}
 
 
@@ -241,6 +399,25 @@ async def list_incidents_for_website(website_id: str, user=Depends(require_user)
         for document in db.incidents.find({"website_id": website_id}).sort("created_at", -1)
     ]
     return incidents
+
+
+@app.get("/websites/{website_id}/telemetry")
+async def website_telemetry(website_id: str, user=Depends(require_user)):
+    _get_website_or_404(user["_id"], website_id)
+    total_events = db.events.count_documents({"website_id": website_id})
+    counts = {
+        event_type: db.events.count_documents({"website_id": website_id, "event_type": event_type})
+        for event_type in ["access", "auth", "network"]
+    }
+    recent_events = [
+        serialize_document(document)
+        for document in db.events.find({"website_id": website_id}).sort("timestamp", -1).limit(12)
+    ]
+    return {
+        "total_events": total_events,
+        "counts": counts,
+        "recent_events": recent_events,
+    }
 
 
 @app.get("/incidents/{incident_id}")
@@ -266,16 +443,20 @@ async def approve_incident(incident_id: str, body: ApprovalRequest, user=Depends
         raise HTTPException(status_code=400, detail="Decision must be approved or rejected")
 
     state = {
+        "website": serialize_document(website),
         "simulation": incident.get("simulation"),
         "telemetry": incident.get("telemetry"),
         "anomaly": incident.get("anomaly"),
+        "correlation": incident.get("correlation"),
         "classification": incident.get("classification"),
+        "investigation": incident.get("investigation"),
         "mitigation_plan": incident.get("mitigation_plan"),
+        "policy_decision": incident.get("policy_decision"),
         "approval_status": body.decision,
         "action_result": incident.get("action_result"),
         "incident_report": incident.get("incident_report"),
+        "agent_trace": incident.get("agent_trace", []),
         "current_stage": incident.get("current_stage"),
-        "website_id": incident.get("website_id"),
     }
     active_incidents[incident_id] = state
 
@@ -285,11 +466,10 @@ async def approve_incident(incident_id: str, body: ApprovalRequest, user=Depends
             "attack_id": incident_id,
             "website_id": incident["website_id"],
             "approval_status": body.decision,
-            "current_stage": "action_executing",
-            "message": "Action Agent is applying the approved response path.",
+            "current_stage": "action",
+            "message": "Human approval received. Action Agent is applying the selected response path.",
         },
     )
-    await asyncio.sleep(0.8)
 
     loop = asyncio.get_event_loop()
     final_state = await loop.run_in_executor(None, action_graph.invoke, state)
@@ -306,6 +486,8 @@ async def approve_incident(incident_id: str, body: ApprovalRequest, user=Depends
             "current_stage": final_state.get("current_stage"),
             "action_result": final_state.get("action_result"),
             "incident_report": final_state.get("incident_report"),
+            "policy_decision": final_state.get("policy_decision"),
+            "agent_trace": final_state.get("agent_trace"),
             "message": "Reporting Agent generated the incident report.",
         },
     )

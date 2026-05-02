@@ -1,6 +1,7 @@
 from pathlib import Path
+import secrets
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from bson import ObjectId
 
 from auth import require_user
@@ -28,6 +29,15 @@ def _runtime_log_paths(website_id: str):
     }
 
 
+def _collector_config():
+    return {
+        "status": "active",
+        "ingest_token": secrets.token_urlsafe(24),
+        "heartbeat_interval_seconds": 15,
+        "mode": "agent",
+    }
+
+
 @router.get("")
 async def list_websites(user=Depends(require_user)):
     websites = [serialize_document(document) for document in db.websites.find({"user_id": user["_id"]}).sort("created_at", 1)]
@@ -49,6 +59,17 @@ async def create_website(payload: WebsiteCreateRequest, user=Depends(require_use
             "access_log_path": payload.access_log_path,
             "auth_log_path": payload.auth_log_path,
             "network_log_path": payload.network_log_path,
+        },
+        "collector": _collector_config(),
+        "demo_site": {
+            "name": "NovaCart",
+            "theme": "startup-commerce",
+            "enabled": True,
+        },
+        "telemetry_stats": {
+            "events_ingested": 0,
+            "last_event_at": None,
+            "sources_seen": [],
         },
         "created_at": utc_now(),
         "updated_at": utc_now(),
@@ -80,6 +101,58 @@ async def get_website(website_id: str, user=Depends(require_user)):
     if not website:
         raise HTTPException(status_code=404, detail="Website not found")
     return serialize_document(website)
+
+
+@router.get("/{website_id}/integration")
+async def get_website_integration(website_id: str, request: Request, user=Depends(require_user)):
+    website = db.websites.find_one(_website_query(user["_id"], website_id))
+    if not website:
+        raise HTTPException(status_code=404, detail="Website not found")
+
+    serialized = serialize_document(website)
+    origin = str(request.base_url).rstrip("/")
+    token = serialized.get("collector", {}).get("ingest_token", "")
+    example_payload = {
+        "source_label": f"{serialized['name']} web collector",
+        "run_detection": True,
+        "events": [
+            {
+                "event_type": "access",
+                "timestamp": utc_now().isoformat(),
+                "src_ip": "198.51.100.24",
+                "path": "/admin/login",
+                "method": "POST",
+                "status_code": 401,
+                "bytes_sent": 712,
+                "user_agent": "startup-app-client",
+                "message": "Access event from the customer website",
+            },
+            {
+                "event_type": "auth",
+                "timestamp": utc_now().isoformat(),
+                "src_ip": "198.51.100.24",
+                "username": "admin",
+                "result": "FAILED",
+                "port": 22,
+                "message": "Authentication failure from the customer website",
+            },
+        ],
+    }
+    return {
+        "website_id": serialized["_id"],
+        "website_name": serialized["name"],
+        "ingest_url": f"{origin}/collector/ingest",
+        "token_header": "X-Collector-Token",
+        "collector_token": token,
+        "sample_payload": example_payload,
+        "curl_example": (
+            f"curl -X POST {origin}/collector/ingest "
+            f"-H 'Content-Type: application/json' "
+            f"-H 'X-Collector-Token: {token}' "
+            f"-d '<payload-json>'"
+        ),
+        "python_collector_path": "backend/collector_agent.py",
+    }
 
 
 @router.post("/{website_id}/connect-demo")

@@ -1,5 +1,4 @@
 import hashlib
-import os
 import secrets
 from typing import Optional
 
@@ -51,3 +50,11 @@ def get_current_user(authorization: Optional[str] = Header(default=None)):
 def require_user(user=Depends(get_current_user)):
     return user
 
+
+def require_collector(x_collector_token: Optional[str] = Header(default=None)):
+    if not x_collector_token:
+        raise HTTPException(status_code=401, detail="Missing collector token")
+    website = db.websites.find_one({"collector.ingest_token": x_collector_token})
+    if not website:
+        raise HTTPException(status_code=401, detail="Invalid collector token")
+    return serialize_document(website)

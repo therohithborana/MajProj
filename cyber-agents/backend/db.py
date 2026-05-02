@@ -18,5 +18,8 @@ def init_db():
     db.users.create_index([("session_token", ASCENDING)], sparse=True)
     db.websites.create_index([("user_id", ASCENDING), ("created_at", ASCENDING)])
     db.websites.create_index([("user_id", ASCENDING), ("name", ASCENDING)])
+    db.websites.create_index([("collector.ingest_token", ASCENDING)], sparse=True, unique=True)
     db.incidents.create_index([("website_id", ASCENDING), ("created_at", ASCENDING)])
     db.incidents.create_index([("attack_id", ASCENDING)], unique=True)
+    db.events.create_index([("website_id", ASCENDING), ("timestamp", ASCENDING)])
+    db.events.create_index([("attack_id", ASCENDING), ("timestamp", ASCENDING)])

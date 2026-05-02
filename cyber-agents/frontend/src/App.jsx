@@ -5,29 +5,20 @@ const WS_URL = "ws://localhost:8000/ws";
 const TOKEN_KEY = "cyberagent_token";
 
 const colors = {
-  background: "#f7f7f5",
+  background: "#f3efe7",
+  canvas: "#fffdf8",
   panel: "#ffffff",
-  panelAlt: "#fbfbfa",
-  border: "#e6e6e1",
-  text: "#191919",
-  muted: "#6b6b67",
-  subtle: "#8d8d88",
-  green: "#0f9d58",
-  red: "#d14343",
+  panelAlt: "#f7f0e3",
+  border: "#ded4c3",
+  text: "#1f1b16",
+  muted: "#6a6256",
+  subtle: "#8b8376",
+  green: "#198754",
+  red: "#c5422f",
   amber: "#b7791f",
-  blue: "#2f76ff",
-  gray: "#787774",
-};
-
-const stageMeta = {
-  red_team_attacking: "Red team generated telemetry",
-  log_monitoring: "Monitoring logs",
-  anomaly_detected: "Anomaly detected",
-  classified: "Incident classified",
-  awaiting_approval: "Awaiting approval",
-  action_executing: "Executing response",
-  mitigated: "Mitigated",
-  manual_queue: "Manual queue",
+  blue: "#1f5eff",
+  gold: "#a06b11",
+  ink: "#11213b",
 };
 
 const severityColors = {
@@ -36,6 +27,115 @@ const severityColors = {
   MEDIUM: colors.amber,
   LOW: colors.green,
 };
+
+const policyColors = {
+  auto_execute: colors.green,
+  approval_required: colors.amber,
+  manual_escalation: colors.red,
+};
+
+function isoNow() {
+  return new Date().toISOString();
+}
+
+function accessEvent(srcIp, path, method = "GET", statusCode = 200, userAgent = "novacart-browser", bytes = 512) {
+  const timestamp = isoNow();
+  return {
+    event_type: "access",
+    timestamp,
+    src_ip: srcIp,
+    path,
+    method,
+    status_code: statusCode,
+    bytes_sent: bytes,
+    user_agent: userAgent,
+    message: `${timestamp} ACCESS src=${srcIp} method=${method} path=${path} status=${statusCode} bytes=${bytes} user_agent=${userAgent}`,
+  };
+}
+
+function authEvent(srcIp, username, result, port = 22) {
+  const timestamp = isoNow();
+  return {
+    event_type: "auth",
+    timestamp,
+    src_ip: srcIp,
+    username,
+    result,
+    port,
+    message: `${timestamp} AUTH service=sshd src=${srcIp} user=${username} result=${result} port=${port}`,
+  };
+}
+
+function networkEvent(srcIp, dstIp, port, packets, bytes, flags = "ACK") {
+  const timestamp = isoNow();
+  return {
+    event_type: "network",
+    timestamp,
+    src_ip: srcIp,
+    dst_ip: dstIp,
+    port,
+    protocol: "TCP",
+    packets,
+    bytes_sent: bytes,
+    flags,
+    message: `${timestamp} NETFLOW src=${srcIp} dst=${dstIp}:${port} proto=TCP packets=${packets} bytes=${bytes} flags=${flags}`,
+  };
+}
+
+function buildCollectorScenarioPayload(kind, website) {
+  const sourceLabel = `${website?.name || "NovaCart"} demo website collector`;
+  const targetIp = "10.0.0.12";
+  const customerIp = "198.51.100.24";
+
+  if (kind === "normal") {
+    return {
+      source_label: sourceLabel,
+      run_detection: false,
+      events: [
+        accessEvent(customerIp, "/"),
+        accessEvent(customerIp, "/products"),
+        accessEvent(customerIp, "/checkout", "POST", 200, "novacart-browser", 920),
+      ],
+    };
+  }
+
+  if (kind === "bruteforce") {
+    return {
+      source_label: sourceLabel,
+      run_detection: true,
+      events: [
+        ...Array.from({ length: 12 }, () => authEvent(customerIp, "admin", "FAILED", 22)),
+        ...Array.from({ length: 8 }, () => networkEvent(customerIp, targetIp, 22, 130, 4600, "ACK")),
+        accessEvent(customerIp, "/admin/login", "POST", 401, "credential-checker", 742),
+      ],
+    };
+  }
+
+  if (kind === "recon") {
+    const paths = ["/admin", "/admin/login", "/.env", "/config.php", "/server-status", "/backup.zip", "/wp-admin"];
+    return {
+      source_label: sourceLabel,
+      run_detection: true,
+      events: [
+        ...paths.map((path) => accessEvent(customerIp, path, "GET", 403, "recon-bot", 228)),
+        ...paths.map(() => networkEvent(customerIp, targetIp, 443, 16, 920, "SYN")),
+      ],
+    };
+  }
+
+  return {
+    source_label: sourceLabel,
+    run_detection: true,
+    events: [
+      ...Array.from({ length: 28 }, (_, index) =>
+        accessEvent(`203.0.113.${20 + (index % 10)}`, ["/", "/products", "/login", "/api/search"][index % 4], "GET", 200, "loadbot", 1400)
+      ),
+      ...Array.from({ length: 28 }, (_, index) =>
+        networkEvent(`203.0.113.${20 + (index % 10)}`, targetIp, 443, 6000 + index * 100, 280000 + index * 1000, "SYN")
+      ),
+    ],
+  };
+}
 
 function authHeaders(token) {
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -64,13 +164,14 @@ function StatusPill({ color, children }) {
         display: "inline-flex",
         alignItems: "center",
         gap: 6,
-        padding: "6px 10px",
+        padding: "7px 12px",
         borderRadius: 999,
         border: `1px solid ${color}`,
         background: `${color}12`,
         color,
         fontSize: 12,
-        fontWeight: 600,
+        fontWeight: 700,
+        textTransform: "capitalize",
       }}
     >
       {children}
@@ -78,15 +179,28 @@ function StatusPill({ color, children }) {
   );
 }
 
-function Section({ title, eyebrow, children }) {
+function Section({ title, eyebrow, right, children }) {
   return (
     <section style={sectionStyle}>
-      <div style={{ marginBottom: 16 }}>
-        {eyebrow ? <div style={eyebrowStyle}>{eyebrow}</div> : null}
-        <div style={{ fontSize: 18, fontWeight: 650 }}>{title}</div>
+      <div style={sectionHeaderStyle}>
+        <div>
+          {eyebrow ? <div style={eyebrowStyle}>{eyebrow}</div> : null}
+          <div style={{ fontSize: 20, fontWeight: 700 }}>{title}</div>
+        </div>
+        {right}
       </div>
       {children}
     </section>
+  );
+}
+
+function StatCard({ label, value, hint }) {
+  return (
+    <div style={statCardStyle}>
+      <div style={eyebrowStyle}>{label}</div>
+      <div style={{ fontSize: 28, fontWeight: 700, margin: "6px 0 4px" }}>{value}</div>
+      <div style={{ color: colors.subtle, fontSize: 12 }}>{hint}</div>
+    </div>
   );
 }
 
@@ -94,30 +208,23 @@ function Field({ label, value, accent }) {
   return (
     <div>
       <div style={eyebrowStyle}>{label}</div>
-      <div style={{ color: accent || colors.text, fontWeight: 600, lineHeight: 1.5 }}>{value}</div>
-    </div>
-  );
-}
-
-function LogBlock({ title, lines }) {
-  if (!lines || !lines.length) {
-    return null;
-  }
-  return (
-    <div style={{ marginTop: 14 }}>
-      <div style={eyebrowStyle}>{title}</div>
-      <div style={monoBoxStyle}>
-        {lines.map((line, index) => (
-          <div key={`${title}-${index}`} style={{ marginBottom: index === lines.length - 1 ? 0 : 8 }}>
-            {line}
-          </div>
-        ))}
+      <div style={{ color: accent || colors.text, fontWeight: 600, lineHeight: 1.5, wordBreak: "break-word" }}>
+        {value || "—"}
       </div>
     </div>
   );
 }
 
-export default function App() {
+function EmptyState({ title, body }) {
+  return (
+    <div style={{ padding: 20, border: `1px dashed ${colors.border}`, borderRadius: 20, color: colors.muted }}>
+      <div style={{ fontWeight: 700, marginBottom: 6 }}>{title}</div>
+      <div style={{ lineHeight: 1.6 }}>{body}</div>
+    </div>
+  );
+}
+
+function App() {
   const [mode, setMode] = useState("login");
   const [token, setToken] = useState(localStorage.getItem(TOKEN_KEY) || "");
   const [user, setUser] = useState(null);
@@ -126,29 +233,25 @@ export default function App() {
   const [incidents, setIncidents] = useState({});
   const [selectedIncidentId, setSelectedIncidentId] = useState("");
   const [feed, setFeed] = useState([]);
+  const [telemetry, setTelemetry] = useState({ total_events: 0, counts: {}, recent_events: [] });
+  const [integration, setIntegration] = useState(null);
   const [connected, setConnected] = useState(false);
   const [autoRunning, setAutoRunning] = useState(false);
   const [decisionLoading, setDecisionLoading] = useState({});
+  const [collectorLoading, setCollectorLoading] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const reconnectRef = useRef(null);
 
-  const [authForm, setAuthForm] = useState({
-    name: "",
-    email: "",
-    password: "",
-  });
-  const [websiteForm, setWebsiteForm] = useState({
-    name: "",
-    domain: "",
-    environment: "development",
-  });
+  const [authForm, setAuthForm] = useState({ name: "", email: "", password: "" });
+  const [websiteForm, setWebsiteForm] = useState({ name: "", domain: "", environment: "production" });
 
   useEffect(() => {
     if (!token) {
       setUser(null);
       setWebsites([]);
       setSelectedWebsiteId("");
+      setTelemetry({ total_events: 0, counts: {}, recent_events: [] });
       return;
     }
 
@@ -163,8 +266,7 @@ export default function App() {
         }
         setUser(me.user);
         setWebsites(websiteList);
-        const firstWebsite = websiteList[0]?._id || "";
-        setSelectedWebsiteId((current) => current || firstWebsite);
+        setSelectedWebsiteId((current) => current || websiteList[0]?._id || "");
       } catch (err) {
         localStorage.removeItem(TOKEN_KEY);
         setToken("");
@@ -194,7 +296,7 @@ export default function App() {
           type: payload.type,
           data: payload.data,
         };
-        setFeed((current) => [entry, ...current].slice(0, 50));
+        setFeed((current) => [entry, ...current].slice(0, 80));
 
         if (payload.type === "init") {
           const mapped = {};
@@ -205,7 +307,7 @@ export default function App() {
           setAutoRunning(Boolean(payload.data.running));
         }
 
-        if (payload.type === "red_team_attack" || payload.type === "agent_update" || payload.type === "incident_resolved") {
+        if (payload.data?.attack_id) {
           setIncidents((current) => {
             const existing = current[payload.data.attack_id] || {};
             return {
@@ -213,7 +315,18 @@ export default function App() {
               [payload.data.attack_id]: {
                 ...existing,
                 ...payload.data,
+                attack_id: payload.data.attack_id,
                 simulation: payload.data.simulation || existing.simulation,
+                telemetry: payload.data.telemetry || existing.telemetry,
+                anomaly: payload.data.anomaly || existing.anomaly,
+                correlation: payload.data.correlation || existing.correlation,
+                classification: payload.data.classification || existing.classification,
+                investigation: payload.data.investigation || existing.investigation,
+                mitigation_plan: payload.data.mitigation_plan || existing.mitigation_plan,
+                policy_decision: payload.data.policy_decision || existing.policy_decision,
+                action_result: payload.data.action_result || existing.action_result,
+                incident_report: payload.data.incident_report || existing.incident_report,
+                agent_trace: payload.data.agent_trace || existing.agent_trace,
               },
             };
           });
@@ -245,9 +358,14 @@ export default function App() {
       return;
     }
     let cancelled = false;
-    async function loadIncidents() {
+
+    async function loadWebsiteData() {
       try {
-        const websiteIncidents = await apiFetch(`/websites/${selectedWebsiteId}/incidents`, {}, token);
+        const [websiteIncidents, telemetryData, integrationData] = await Promise.all([
+          apiFetch(`/websites/${selectedWebsiteId}/incidents`, {}, token),
+          apiFetch(`/websites/${selectedWebsiteId}/telemetry`, {}, token),
+          apiFetch(`/websites/${selectedWebsiteId}/integration`, {}, token),
+        ]);
         if (cancelled) {
           return;
         }
@@ -258,12 +376,15 @@ export default function App() {
           });
           return next;
         });
+        setTelemetry(telemetryData);
+        setIntegration(integrationData);
         setSelectedIncidentId((current) => current || websiteIncidents[0]?.attack_id || "");
       } catch (err) {
         setError(err.message);
       }
     }
-    loadIncidents();
+
+    loadWebsiteData();
     return () => {
       cancelled = true;
     };
@@ -279,16 +400,16 @@ export default function App() {
   );
   const selectedIncident =
     websiteIncidents.find((incident) => incident.attack_id === selectedIncidentId) || websiteIncidents[0] || null;
-  const selectedAttack = selectedIncident?.classification?.attack;
 
-  const stats = useMemo(() => {
-    return {
-      total: websiteIncidents.length,
-      pending: websiteIncidents.filter((incident) => incident.approval_status === "pending").length,
-      mitigated: websiteIncidents.filter((incident) => incident.action_result?.status === "MITIGATED").length,
+  const stats = useMemo(
+    () => ({
+      incidents: websiteIncidents.length,
+      autoExecuted: websiteIncidents.filter((incident) => incident.action_result?.execution_mode === "AUTONOMOUS").length,
+      approvals: websiteIncidents.filter((incident) => incident.policy_decision?.mode === "approval_required").length,
       critical: websiteIncidents.filter((incident) => incident.classification?.attack?.severity === "CRITICAL").length,
-    };
-  }, [websiteIncidents]);
+    }),
+    [websiteIncidents]
+  );
 
   async function submitAuth(targetMode) {
     try {
@@ -328,19 +449,7 @@ export default function App() {
       );
       setWebsites((current) => [...current, website]);
       setSelectedWebsiteId(website._id);
-      setWebsiteForm({ name: "", domain: "", environment: "development" });
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function connectDemo(websiteId) {
-    try {
-      setLoading(true);
-      const website = await apiFetch(`/websites/${websiteId}/connect-demo`, { method: "POST" }, token);
-      setWebsites((current) => current.map((item) => (item._id === websiteId ? website : item)));
+      setWebsiteForm({ name: "", domain: "", environment: "production" });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -355,9 +464,32 @@ export default function App() {
     try {
       setError("");
       await apiFetch(`/websites/${selectedWebsiteId}/simulate`, { method: "POST" }, token);
+      const telemetryData = await apiFetch(`/websites/${selectedWebsiteId}/telemetry`, {}, token);
+      setTelemetry(telemetryData);
     } catch (err) {
       setError(err.message);
     }
+  }
+
+  async function refreshWebsiteData() {
+    if (!token || !selectedWebsiteId) {
+      return;
+    }
+    const [websiteIncidents, telemetryData, integrationData] = await Promise.all([
+      apiFetch(`/websites/${selectedWebsiteId}/incidents`, {}, token),
+      apiFetch(`/websites/${selectedWebsiteId}/telemetry`, {}, token),
+      apiFetch(`/websites/${selectedWebsiteId}/integration`, {}, token),
+    ]);
+    setIncidents((current) => {
+      const next = { ...current };
+      websiteIncidents.forEach((incident) => {
+        next[incident.attack_id] = incident;
+      });
+      return next;
+    });
+    setTelemetry(telemetryData);
+    setIntegration(integrationData);
+    setSelectedIncidentId((current) => current || websiteIncidents[0]?.attack_id || "");
   }
 
   async function toggleAuto() {
@@ -373,7 +505,7 @@ export default function App() {
     }
   }
 
-  async function approveIncident(decision) {
+  async function decideIncident(decision) {
     if (!selectedIncident) {
       return;
     }
@@ -392,6 +524,34 @@ export default function App() {
     }
   }
 
+  async function runCollectorScenario(kind) {
+    if (!selectedWebsite?.collector?.ingest_token) {
+      return;
+    }
+    try {
+      setCollectorLoading(kind);
+      setError("");
+      const payload = buildCollectorScenarioPayload(kind, selectedWebsite);
+      const response = await fetch(`${API_BASE}/collector/ingest`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Collector-Token": selectedWebsite.collector.ingest_token,
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.detail || "Collector ingestion failed");
+      }
+      await refreshWebsiteData();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setCollectorLoading("");
+    }
+  }
+
   function logout() {
     localStorage.removeItem(TOKEN_KEY);
     setToken("");
@@ -400,20 +560,25 @@ export default function App() {
     setSelectedWebsiteId("");
     setSelectedIncidentId("");
     setIncidents({});
+    setFeed([]);
+    setIntegration(null);
   }
 
   if (!user) {
     return (
       <div style={pageStyle}>
         <div style={heroWrapStyle}>
-          <div style={{ maxWidth: 560 }}>
-            <div style={eyebrowStyle}>CyberAgent</div>
-            <div style={{ fontSize: 42, fontWeight: 700, letterSpacing: -1, marginBottom: 14 }}>
-              Multi-agent website security, with a demo site you can plug in now.
+          <div style={{ maxWidth: 620 }}>
+            <div style={eyebrowStyle}>Autonomous AI SOC</div>
+            <div style={heroTitleStyle}>Multi-agent cyber defense for startups with 70% automated response.</div>
+            <div style={heroBodyStyle}>
+              Connect application, authentication, and network telemetry. Watch cooperating AI agents normalize,
+              detect, investigate, classify, plan, and either auto-contain threats or escalate them for approval.
             </div>
-            <div style={{ color: colors.muted, fontSize: 16, lineHeight: 1.7 }}>
-              Sign up, connect a website project, and watch CyberAgent monitor telemetry, detect incidents, generate
-              mitigation plans, and walk you through approval-gated response.
+            <div style={heroBadgeRowStyle}>
+              <StatusPill color={colors.green}>Collector-driven telemetry</StatusPill>
+              <StatusPill color={colors.blue}>Agent traceable investigations</StatusPill>
+              <StatusPill color={colors.amber}>Human oversight for risky actions</StatusPill>
             </div>
           </div>
 
@@ -449,7 +614,7 @@ export default function App() {
             />
             {error ? <div style={errorStyle}>{error}</div> : null}
             <button onClick={() => submitAuth(mode)} style={primaryButtonStyle} disabled={loading}>
-              {loading ? "Working..." : mode === "signup" ? "Create account" : "Log in"}
+              {loading ? "Working..." : mode === "signup" ? "Create workspace" : "Log in"}
             </button>
           </div>
         </div>
@@ -462,32 +627,31 @@ export default function App() {
       <div style={pageStyle}>
         <div style={topBarStyle}>
           <div>
-            <div style={eyebrowStyle}>Welcome</div>
+            <div style={eyebrowStyle}>Workspace</div>
             <div style={{ fontSize: 30, fontWeight: 700 }}>{user.name}</div>
           </div>
           <button onClick={logout} style={secondaryButtonStyle}>
             Log out
           </button>
         </div>
-
         <div style={setupCardStyle}>
-          <div style={eyebrowStyle}>Connect website</div>
-          <div style={{ fontSize: 28, fontWeight: 700, marginBottom: 10 }}>Create your first monitored website</div>
+          <div style={eyebrowStyle}>Protected project</div>
+          <div style={{ fontSize: 30, fontWeight: 700, marginBottom: 10 }}>Create your first monitored startup app</div>
           <div style={{ color: colors.muted, lineHeight: 1.7, marginBottom: 18 }}>
-            Phase 1 connects a demo website automatically. We’ll use this project to scope incidents, telemetry, and
-            monitoring to your account.
+            This creates a tenant-scoped project, collector token, telemetry store, and autonomous agent workflow so
+            you can demo the complete SaaS flow right away.
           </div>
           <div style={formGridStyle}>
             <input
               value={websiteForm.name}
               onChange={(event) => setWebsiteForm((current) => ({ ...current, name: event.target.value }))}
-              placeholder="Website name"
+              placeholder="Project name"
               style={inputStyle}
             />
             <input
               value={websiteForm.domain}
               onChange={(event) => setWebsiteForm((current) => ({ ...current, domain: event.target.value }))}
-              placeholder="Website domain"
+              placeholder="Domain"
               style={inputStyle}
             />
             <input
@@ -499,7 +663,7 @@ export default function App() {
           </div>
           {error ? <div style={errorStyle}>{error}</div> : null}
           <button onClick={createWebsite} style={primaryButtonStyle} disabled={loading}>
-            {loading ? "Creating..." : "Create and connect demo website"}
+            {loading ? "Creating..." : "Create protected project"}
           </button>
         </div>
       </div>
@@ -510,12 +674,16 @@ export default function App() {
     <div style={pageStyle}>
       <div style={topBarStyle}>
         <div>
-          <div style={eyebrowStyle}>CyberAgent Dashboard</div>
-          <div style={{ fontSize: 30, fontWeight: 700, marginBottom: 6 }}>Welcome back, {user.name}</div>
-          <div style={{ color: colors.muted }}>Manage websites, monitor telemetry, and review incidents.</div>
+          <div style={eyebrowStyle}>CyberAgent Command</div>
+          <div style={{ fontSize: 32, fontWeight: 800 }}>Autonomous AI SOC</div>
+          <div style={{ color: colors.muted, marginTop: 6 }}>
+            AI agents handle ingestion, triage, investigation, policy, and response while humans stay in the loop for risky actions.
+          </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <StatusPill color={connected ? colors.green : colors.red}>{connected ? "Live" : "Offline"}</StatusPill>
+          <StatusPill color={connected ? colors.green : colors.red}>
+            {connected ? "Realtime connected" : "Live stream disconnected"}
+          </StatusPill>
           <button onClick={logout} style={secondaryButtonStyle}>
             Log out
           </button>
@@ -524,40 +692,38 @@ export default function App() {
 
       {error ? <div style={errorStyle}>{error}</div> : null}
 
-      <div style={mainGridStyle}>
+      <div style={dashboardLayoutStyle}>
         <aside style={sidebarStyle}>
-          <Section title="Your websites" eyebrow="Connected projects">
+          <Section title="Protected projects" eyebrow="Multi-tenant workspaces">
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {websites.map((website) => (
                 <button
                   key={website._id}
                   onClick={() => setSelectedWebsiteId(website._id)}
                   style={{
-                    ...websiteButtonStyle,
+                    ...projectCardStyle,
                     background: selectedWebsiteId === website._id ? colors.panelAlt : colors.panel,
                   }}
                 >
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
-                    <div style={{ fontWeight: 650 }}>{website.name}</div>
-                    <StatusPill color={website.status === "connected" ? colors.green : colors.amber}>
-                      {website.status}
-                    </StatusPill>
+                    <div style={{ fontWeight: 700 }}>{website.name}</div>
+                    <StatusPill color={website.status === "connected" ? colors.green : colors.amber}>{website.status}</StatusPill>
                   </div>
                   <div style={{ color: colors.muted, fontSize: 13 }}>{website.domain}</div>
-                  <div style={{ color: colors.subtle, fontSize: 12, marginTop: 4 }}>{website.environment}</div>
+                  <div style={{ color: colors.subtle, fontSize: 12, marginTop: 6 }}>{website.environment}</div>
                 </button>
               ))}
             </div>
           </Section>
 
-          <Section title="Live feed" eyebrow="Realtime agent events">
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 360, overflowY: "auto" }}>
+          <Section title="Agent activity" eyebrow="Live orchestration feed">
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, maxHeight: 420, overflowY: "auto" }}>
               {feed
                 .filter((entry) => !selectedWebsiteId || entry.data.website_id === selectedWebsiteId || entry.type === "init")
                 .map((entry) => (
                   <div key={entry.id} style={feedCardStyle}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 6 }}>
-                      <div style={{ fontSize: 12, fontWeight: 600 }}>{entry.type}</div>
+                      <div style={{ fontSize: 12, fontWeight: 700 }}>{entry.data.agent_trace_entry?.agent || entry.type}</div>
                       <div style={{ fontSize: 11, color: colors.subtle }}>{new Date(entry.timestamp).toLocaleTimeString()}</div>
                     </div>
                     <div style={{ color: colors.muted, fontSize: 12, lineHeight: 1.5 }}>
@@ -569,352 +735,560 @@ export default function App() {
           </Section>
         </aside>
 
-        <main style={{ minWidth: 0 }}>
+        <main style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 20 }}>
           {selectedWebsite ? (
             <>
-              <Section title={selectedWebsite.name} eyebrow="Connected website">
-                <div style={statsGridStyle}>
-                  <Field label="Domain" value={selectedWebsite.domain} />
-                  <Field label="Environment" value={selectedWebsite.environment} />
-                  <Field label="Connection type" value={selectedWebsite.connection_type} />
-                  <Field label="Status" value={selectedWebsite.status} accent={selectedWebsite.status === "connected" ? colors.green : colors.amber} />
-                </div>
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 18 }}>
-                  {selectedWebsite.status !== "connected" ? (
-                    <button onClick={() => connectDemo(selectedWebsite._id)} style={primaryButtonStyle}>
-                      Connect demo website
+              <Section
+                title={selectedWebsite.name}
+                eyebrow="Protected application"
+                right={
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <button onClick={simulateAttack} style={primaryButtonStyle}>
+                      Simulate attack
                     </button>
-                  ) : null}
-                  <button onClick={simulateAttack} style={primaryButtonStyle}>
-                    Simulate attack
-                  </button>
-                  <button onClick={toggleAuto} style={secondaryButtonStyle}>
-                    {autoRunning ? "Stop auto monitor" : "Start auto monitor"}
-                  </button>
+                    <button onClick={toggleAuto} style={secondaryButtonStyle}>
+                      {autoRunning ? "Stop auto monitor" : "Start auto monitor"}
+                    </button>
+                  </div>
+                }
+              >
+                <div style={heroPanelStyle}>
+                  <div style={metaGridStyle}>
+                    <Field label="Domain" value={selectedWebsite.domain} />
+                    <Field label="Environment" value={selectedWebsite.environment} />
+                    <Field label="Collector mode" value={selectedWebsite.collector?.mode || "agent"} />
+                    <Field label="Project status" value={selectedWebsite.status} accent={colors.green} />
+                  </div>
+                  <div style={collectorCardStyle}>
+                    <div>
+                      <div style={eyebrowStyle}>Collector token</div>
+                      <div style={tokenStyle}>{selectedWebsite.collector?.ingest_token || "Unavailable"}</div>
+                    </div>
+                    <div style={{ color: colors.muted, lineHeight: 1.6, fontSize: 14 }}>
+                      Customer-side collector posts batched events to `POST /collector/ingest` with `X-Collector-Token`.
+                    </div>
+                  </div>
                 </div>
               </Section>
 
-              <div style={miniStatsGridStyle}>
-                <StatCard label="Total incidents" value={stats.total} />
-                <StatCard label="Pending approval" value={stats.pending} />
-                <StatCard label="Mitigated" value={stats.mitigated} />
-                <StatCard label="Critical" value={stats.critical} />
+              <Section title="Integration lab" eyebrow="Collector setup and customer onboarding">
+                <div style={integrationGridStyle}>
+                  <div style={integrationPanelStyle}>
+                    <div style={eyebrowStyle}>How it connects</div>
+                    <div style={{ fontSize: 24, fontWeight: 800, marginBottom: 10 }}>
+                      {selectedWebsite.demo_site?.name || "NovaCart"} sends telemetry with the collector token.
+                    </div>
+                    <div style={{ color: colors.muted, lineHeight: 1.7, marginBottom: 16 }}>
+                      In a real deployment, a small collector runs beside the customer website, reads app, auth, and
+                      network events, and posts them to your backend with the project token in the header.
+                    </div>
+                    <div style={tableWrapStyle}>
+                      <div style={tableRowStyle}>
+                        <div style={{ fontWeight: 700, minWidth: 130 }}>Step 1</div>
+                        <div style={{ color: colors.muted }}>Create the protected project and copy its collector token.</div>
+                      </div>
+                      <div style={tableRowStyle}>
+                        <div style={{ fontWeight: 700, minWidth: 130 }}>Step 2</div>
+                        <div style={{ color: colors.muted }}>
+                          Paste the token into the customer-side collector as `CYBERAGENT_COLLECTOR_TOKEN`.
+                        </div>
+                      </div>
+                      <div style={tableRowStyle}>
+                        <div style={{ fontWeight: 700, minWidth: 130 }}>Step 3</div>
+                        <div style={{ color: colors.muted }}>
+                          The collector sends batched events to `/collector/ingest` using `X-Collector-Token`.
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={codePanelStyle}>
+                    <div style={eyebrowStyle}>Collector request</div>
+                    <pre style={codeBlockStyle}>
+{`POST ${integration?.ingest_url || `${API_BASE}/collector/ingest`}
+Header: ${integration?.token_header || "X-Collector-Token"}: ${selectedWebsite.collector?.ingest_token || ""}
+Body: {
+  "source_label": "${selectedWebsite.name} web collector",
+  "run_detection": true,
+  "events": [...]
+}`}
+                    </pre>
+                    <div style={{ color: colors.subtle, fontSize: 13, lineHeight: 1.6 }}>
+                      Sample collector file: `backend/collector_agent.py`
+                    </div>
+                  </div>
+                </div>
+              </Section>
+
+              <Section title="Dummy customer website" eyebrow="Live integration demo">
+                <div style={dummySiteShellStyle}>
+                  <div style={dummyNavStyle}>
+                    <div>
+                      <div style={{ fontWeight: 800, fontSize: 22 }}>{selectedWebsite.demo_site?.name || "NovaCart"}</div>
+                      <div style={{ color: "#b7c7ec", fontSize: 13 }}>A protected startup storefront integrated with CyberAgent</div>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <StatusPill color="#9ed0ff">Collector installed</StatusPill>
+                      <StatusPill color="#8de1b0">Project token active</StatusPill>
+                    </div>
+                  </div>
+
+                  <div style={dummyHeroGridStyle}>
+                    <div>
+                      <div style={{ color: "#ffe8a3", fontSize: 12, fontWeight: 800, letterSpacing: 1.2, textTransform: "uppercase" }}>
+                        Demo storefront
+                      </div>
+                      <div style={{ fontSize: 36, lineHeight: 1.05, fontWeight: 800, margin: "10px 0 12px" }}>
+                        Payments, logins, and customer traffic that your AI SOC can actually monitor.
+                      </div>
+                      <div style={{ color: "#d8e4ff", lineHeight: 1.7, maxWidth: 560 }}>
+                        Use these actions to simulate what happens on a startup website. Each button sends real
+                        collector telemetry into the platform using the token above.
+                      </div>
+                      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 20 }}>
+                        <button
+                          onClick={() => runCollectorScenario("normal")}
+                          style={sitePrimaryButtonStyle}
+                          disabled={Boolean(collectorLoading)}
+                        >
+                          {collectorLoading === "normal" ? "Sending..." : "Browse products"}
+                        </button>
+                        <button
+                          onClick={() => runCollectorScenario("bruteforce")}
+                          style={siteSecondaryButtonStyle}
+                          disabled={Boolean(collectorLoading)}
+                        >
+                          {collectorLoading === "bruteforce" ? "Sending..." : "Simulate failed logins"}
+                        </button>
+                        <button
+                          onClick={() => runCollectorScenario("recon")}
+                          style={siteSecondaryButtonStyle}
+                          disabled={Boolean(collectorLoading)}
+                        >
+                          {collectorLoading === "recon" ? "Sending..." : "Simulate recon scan"}
+                        </button>
+                        <button
+                          onClick={() => runCollectorScenario("traffic")}
+                          style={siteAlertButtonStyle}
+                          disabled={Boolean(collectorLoading)}
+                        >
+                          {collectorLoading === "traffic" ? "Sending..." : "Simulate traffic spike"}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div style={siteInfoPanelStyle}>
+                      <div style={eyebrowStyle}>What each action does</div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                        <div style={siteInfoCardStyle}>
+                          <div style={{ fontWeight: 700 }}>Browse products</div>
+                          <div style={{ color: "#c8d6f2", fontSize: 13 }}>Normal access events only. Useful to show healthy telemetry.</div>
+                        </div>
+                        <div style={siteInfoCardStyle}>
+                          <div style={{ fontWeight: 700 }}>Failed logins</div>
+                          <div style={{ color: "#c8d6f2", fontSize: 13 }}>Creates a brute-force style auth burst and opens an incident.</div>
+                        </div>
+                        <div style={siteInfoCardStyle}>
+                          <div style={{ fontWeight: 700 }}>Recon scan</div>
+                          <div style={{ color: "#c8d6f2", fontSize: 13 }}>Probes sensitive paths like `/admin` and `/.env`.</div>
+                        </div>
+                        <div style={siteInfoCardStyle}>
+                          <div style={{ fontWeight: 700 }}>Traffic spike</div>
+                          <div style={{ color: "#c8d6f2", fontSize: 13 }}>Generates a DDoS-like burst with many access and network events.</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </Section>
+
+              <div style={statsGridStyle}>
+                <StatCard label="Total telemetry events" value={telemetry.total_events || 0} hint="Collector-fed access, auth, and network data" />
+                <StatCard label="Incidents" value={stats.incidents} hint="Detected across this protected project" />
+                <StatCard label="Auto-executed" value={stats.autoExecuted} hint="Resolved autonomously by policy" />
+                <StatCard label="Approval-gated" value={stats.approvals} hint="Queued for human decision" />
               </div>
 
-              <Section title="Incidents" eyebrow="Website incident queue">
-                <div style={{ display: "grid", gridTemplateColumns: "320px minmax(0, 1fr)", gap: 16 }}>
+              <Section title="Telemetry overview" eyebrow="Normalized event streams">
+                <div style={statsGridStyle}>
+                  <StatCard label="Access events" value={telemetry.counts?.access || 0} hint="Application requests" />
+                  <StatCard label="Auth events" value={telemetry.counts?.auth || 0} hint="Identity and login activity" />
+                  <StatCard label="Network events" value={telemetry.counts?.network || 0} hint="Connection and flow telemetry" />
+                </div>
+                <div style={tableWrapStyle}>
+                  {(telemetry.recent_events || []).slice(0, 8).map((event, index) => (
+                    <div key={`${event.attack_id || "event"}-${index}`} style={tableRowStyle}>
+                      <div style={{ fontWeight: 700, minWidth: 90 }}>{event.event_type}</div>
+                      <div style={{ color: colors.muted, flex: 1 }}>{event.message}</div>
+                    </div>
+                  ))}
+                </div>
+              </Section>
+
+              <Section title="Incident queue" eyebrow="AI-driven detections">
+                <div style={incidentLayoutStyle}>
                   <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                    {websiteIncidents.map((incident) => (
-                      <button
-                        key={incident.attack_id}
-                        onClick={() => setSelectedIncidentId(incident.attack_id)}
-                        style={{
-                          ...websiteButtonStyle,
-                          background: selectedIncident?.attack_id === incident.attack_id ? colors.panelAlt : colors.panel,
-                        }}
-                      >
-                        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
-                          <div style={{ fontWeight: 650 }}>{incident.attack_id}</div>
-                          {incident.classification?.attack?.severity ? (
-                            <StatusPill color={severityColors[incident.classification.attack.severity]}>
-                              {incident.classification.attack.severity}
-                            </StatusPill>
-                          ) : null}
-                        </div>
-                        <div style={{ fontSize: 13, color: colors.muted, marginBottom: 4 }}>
-                          {incident.classification?.predicted_class || incident.simulation?.attack_profile?.attack_type || "Pending"}
-                        </div>
-                        <div style={{ fontSize: 12, color: colors.subtle }}>
-                          {stageMeta[incident.current_stage] || incident.current_stage}
-                        </div>
-                      </button>
-                    ))}
-                    {!websiteIncidents.length ? (
-                      <div style={{ color: colors.muted }}>No incidents yet for this website.</div>
-                    ) : null}
+                    {websiteIncidents.length ? (
+                      websiteIncidents.map((incident) => {
+                        const severity = incident.classification?.attack?.severity || "LOW";
+                        const policyMode = incident.policy_decision?.mode || "approval_required";
+                        return (
+                          <button
+                            key={incident.attack_id}
+                            onClick={() => setSelectedIncidentId(incident.attack_id)}
+                            style={{
+                              ...projectCardStyle,
+                              background: selectedIncident?.attack_id === incident.attack_id ? colors.panelAlt : colors.panel,
+                            }}
+                          >
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 10 }}>
+                              <div style={{ fontWeight: 700 }}>{incident.classification?.predicted_class || incident.attack_id}</div>
+                              <StatusPill color={severityColors[severity] || colors.amber}>{severity}</StatusPill>
+                            </div>
+                            <div style={{ color: colors.muted, fontSize: 13, marginBottom: 8 }}>
+                              {incident.simulation?.description || "Investigation in progress"}
+                            </div>
+                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                              <StatusPill color={policyColors[policyMode] || colors.blue}>{policyMode.replaceAll("_", " ")}</StatusPill>
+                              {incident.action_result?.execution_mode ? (
+                                <StatusPill color={colors.blue}>{incident.action_result.execution_mode.replaceAll("_", " ")}</StatusPill>
+                              ) : null}
+                            </div>
+                          </button>
+                        );
+                      })
+                    ) : (
+                      <EmptyState title="No incidents yet" body="Run the simulator or start auto-monitoring to generate collector-fed threat telemetry." />
+                    )}
                   </div>
 
                   <div>
-                    {!selectedIncident ? (
-                      <div style={emptyStateStyle}>Select an incident to inspect its flow.</div>
-                    ) : (
-                      <>
-                        <Section title="Red Team Agent" eyebrow="Generated telemetry">
-                          <div style={statsGridStyle}>
-                            <Field label="Scenario" value={selectedIncident.simulation.attack_profile.attack_type} />
-                            <Field label="Primary source" value={selectedIncident.simulation.attack_profile.primary_src_ip} />
+                    {selectedIncident ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                        <div style={detailHeroStyle}>
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                            <div>
+                              <div style={eyebrowStyle}>Incident</div>
+                              <div style={{ fontSize: 28, fontWeight: 800 }}>
+                                {selectedIncident.classification?.predicted_class || selectedIncident.attack_id}
+                              </div>
+                            </div>
+                            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                              <StatusPill
+                                color={severityColors[selectedIncident.classification?.attack?.severity || "MEDIUM"] || colors.amber}
+                              >
+                                {selectedIncident.classification?.attack?.severity || "MEDIUM"}
+                              </StatusPill>
+                              <StatusPill
+                                color={policyColors[selectedIncident.policy_decision?.mode || "approval_required"] || colors.blue}
+                              >
+                                {(selectedIncident.policy_decision?.mode || "approval_required").replaceAll("_", " ")}
+                              </StatusPill>
+                            </div>
+                          </div>
+                          <div style={{ color: colors.muted, lineHeight: 1.6, marginTop: 12 }}>
+                            {selectedIncident.anomaly?.summary || selectedIncident.simulation?.description}
+                          </div>
+                        </div>
+
+                        <div style={metaGridStyle}>
+                          <Field label="Primary source" value={selectedIncident.classification?.attack?.primary_src_ip} />
+                          <Field
+                            label="Target"
+                            value={
+                              selectedIncident.classification?.attack
+                                ? `${selectedIncident.classification.attack.target_ip}:${selectedIncident.classification.attack.target_port}`
+                                : "—"
+                            }
+                          />
+                          <Field
+                            label="Confidence"
+                            value={
+                              selectedIncident.classification?.confidence
+                                ? `${Math.round(selectedIncident.classification.confidence * 100)}%`
+                                : "—"
+                            }
+                          />
+                          <Field label="Risk score" value={selectedIncident.classification?.risk_score} />
+                        </div>
+
+                        <Section title="Automation decision" eyebrow="Policy agent">
+                          <div style={tableWrapStyle}>
+                            <Field label="Policy mode" value={selectedIncident.policy_decision?.mode?.replaceAll("_", " ")} />
+                            <Field label="Reason" value={selectedIncident.policy_decision?.reason} />
                             <Field
-                              label="Target"
-                              value={`${selectedIncident.simulation.attack_profile.target_ip}:${selectedIncident.simulation.attack_profile.target_port}`}
+                              label="Execution status"
+                              value={selectedIncident.action_result?.execution_mode?.replaceAll("_", " ") || "Awaiting action"}
                             />
-                            <Field label="Expected rate" value={`${selectedIncident.simulation.attack_profile.packet_rate}/sec`} />
                           </div>
-                          <div style={{ color: colors.muted, lineHeight: 1.7, marginTop: 14 }}>
-                            {selectedIncident.simulation.description}
-                          </div>
-                          <LogBlock title="Access logs" lines={selectedIncident.simulation.telemetry.generated_logs.access} />
-                          <LogBlock title="Auth logs" lines={selectedIncident.simulation.telemetry.generated_logs.auth} />
-                          <LogBlock title="Network logs" lines={selectedIncident.simulation.telemetry.generated_logs.network} />
+                          {selectedIncident.approval_status === "pending" ? (
+                            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 16 }}>
+                              <button
+                                onClick={() => decideIncident("approved")}
+                                style={primaryButtonStyle}
+                                disabled={decisionLoading[selectedIncident.attack_id]}
+                              >
+                                {decisionLoading[selectedIncident.attack_id] ? "Applying..." : "Approve containment"}
+                              </button>
+                              <button
+                                onClick={() => decideIncident("rejected")}
+                                style={dangerButtonStyle}
+                                disabled={decisionLoading[selectedIncident.attack_id]}
+                              >
+                                Reject to manual queue
+                              </button>
+                            </div>
+                          ) : null}
                         </Section>
 
-                        {selectedIncident.telemetry ? (
-                          <Section title="Log Monitor Agent" eyebrow="Telemetry ingestion">
-                            <div style={statsGridStyle}>
-                              <Field label="Observed logs" value={selectedIncident.telemetry.total_logs_observed} />
-                              <Field label="Access" value={selectedIncident.telemetry.log_counts.access} />
-                              <Field label="Auth" value={selectedIncident.telemetry.log_counts.auth} />
-                              <Field label="Network" value={selectedIncident.telemetry.log_counts.network} />
-                            </div>
-                          </Section>
-                        ) : null}
-
-                        {selectedIncident.anomaly ? (
-                          <Section title="Anomaly Detection Agent" eyebrow="Detection evidence">
-                            <div style={statsGridStyle}>
-                              <Field label="Anomaly type" value={selectedIncident.anomaly.anomaly_type} />
-                              <Field label="Primary source" value={selectedIncident.anomaly.primary_src_ip} />
-                              <Field
-                                label="Target"
-                                value={`${selectedIncident.anomaly.target_ip}:${selectedIncident.anomaly.target_port}`}
-                              />
-                              <Field label="Severity" value={selectedIncident.anomaly.severity} accent={severityColors[selectedIncident.anomaly.severity]} />
-                            </div>
-                            <div style={{ color: colors.muted, lineHeight: 1.7, marginTop: 14 }}>
-                              {selectedIncident.anomaly.summary}
-                            </div>
-                          </Section>
-                        ) : null}
-
-                        {selectedIncident.classification && selectedAttack ? (
-                          <Section title="Classification Agent" eyebrow="Incident context">
-                            <div style={statsGridStyle}>
-                              <Field label="Attack type" value={selectedIncident.classification.predicted_class} />
-                              <Field label="Confidence" value={`${(selectedIncident.classification.confidence * 100).toFixed(1)}%`} />
-                              <Field label="Risk score" value={selectedIncident.classification.risk_score} accent={colors.amber} />
-                              <Field label="Target" value={`${selectedAttack.target_ip}:${selectedAttack.target_port}`} />
-                            </div>
-                            <div style={{ marginTop: 14, color: colors.muted, lineHeight: 1.7 }}>
-                              {selectedIncident.classification.key_indicators.map((item) => (
-                                <div key={item} style={{ marginBottom: 6 }}>
-                                  • {item}
+                        <Section title="Agent trace" eyebrow="Explainable orchestration">
+                          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                            {(selectedIncident.agent_trace || []).map((entry, index) => (
+                              <div key={`${entry.agent}-${index}`} style={traceCardStyle}>
+                                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 6 }}>
+                                  <div style={{ fontWeight: 700 }}>{entry.agent}</div>
+                                  <div style={{ color: colors.subtle, fontSize: 12 }}>{entry.stage}</div>
                                 </div>
-                              ))}
-                            </div>
-                          </Section>
-                        ) : null}
-
-                        {selectedIncident.mitigation_plan ? (
-                          <Section title="Response Planning Agent" eyebrow="Approval gated">
-                            <div style={statsGridStyle}>
-                              <Field label="Strategy" value={selectedIncident.mitigation_plan.strategy} />
-                              <Field label="Estimated time" value={selectedIncident.mitigation_plan.estimated_mitigation_time} />
-                              <Field label="Collateral risk" value={selectedIncident.mitigation_plan.collateral_risk} accent={colors.amber} />
-                              <Field label="Status" value={selectedIncident.approval_status || "pending"} />
-                            </div>
-                            <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
-                              {selectedIncident.mitigation_plan.steps.map((step) => (
-                                <div key={`${step.step}-${step.action}`} style={feedCardStyle}>
-                                  <div style={{ fontWeight: 650, marginBottom: 8 }}>
-                                    {step.step}. {step.action}
-                                  </div>
-                                  <div style={monoBoxStyle}>{step.command}</div>
-                                  <div style={{ color: colors.muted, marginTop: 10 }}>{step.impact}</div>
-                                </div>
-                              ))}
-                            </div>
-                            {selectedIncident.approval_status === "pending" ? (
-                              <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
-                                <button
-                                  onClick={() => approveIncident("approved")}
-                                  style={primaryButtonStyle}
-                                  disabled={decisionLoading[selectedIncident.attack_id]}
-                                >
-                                  Approve
-                                </button>
-                                <button
-                                  onClick={() => approveIncident("rejected")}
-                                  style={secondaryButtonStyle}
-                                  disabled={decisionLoading[selectedIncident.attack_id]}
-                                >
-                                  Reject
-                                </button>
+                                <div style={{ color: colors.muted, lineHeight: 1.5 }}>{entry.summary}</div>
                               </div>
-                            ) : null}
-                          </Section>
-                        ) : null}
+                            ))}
+                          </div>
+                        </Section>
 
-                        {selectedIncident.action_result ? (
-                          <Section title="Action Agent" eyebrow="Execution result">
-                            <div style={statsGridStyle}>
-                              <Field label="Status" value={selectedIncident.action_result.status} accent={selectedIncident.action_result.status === "MITIGATED" ? colors.green : colors.gray} />
-                              {selectedIncident.action_result.total_execution_time_ms ? (
-                                <Field label="Execution time" value={`${selectedIncident.action_result.total_execution_time_ms} ms`} />
-                              ) : null}
-                              {selectedIncident.action_result.ticket_id ? (
-                                <Field label="Ticket" value={selectedIncident.action_result.ticket_id} />
-                              ) : null}
-                            </div>
-                          </Section>
-                        ) : null}
+                        <Section title="Evidence and playbook" eyebrow="Investigation output">
+                          <div style={metaGridStyle}>
+                            <Field
+                              label="Affected assets"
+                              value={(selectedIncident.investigation?.affected_assets || []).join(", ")}
+                            />
+                            <Field
+                              label="Flagged paths"
+                              value={(selectedIncident.anomaly?.flagged_paths || []).join(", ")}
+                            />
+                          </div>
+                          <div style={tableWrapStyle}>
+                            {(selectedIncident.mitigation_plan?.steps || []).map((step) => (
+                              <div key={step.step} style={tableRowStyle}>
+                                <div style={{ fontWeight: 700, minWidth: 88 }}>Step {step.step}</div>
+                                <div style={{ flex: 1 }}>
+                                  <div style={{ fontWeight: 700 }}>{step.action}</div>
+                                  <div style={{ color: colors.muted, fontSize: 13, marginTop: 4 }}>{step.command}</div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </Section>
 
-                        {selectedIncident.incident_report ? (
-                          <Section title="Reporting Agent" eyebrow="Final report">
-                            <div style={{ color: colors.muted, lineHeight: 1.7 }}>
-                              {selectedIncident.incident_report.executive_summary}
-                            </div>
-                          </Section>
-                        ) : null}
-                      </>
+                        <Section title="Final report" eyebrow="Reporting agent">
+                          {selectedIncident.incident_report ? (
+                            <>
+                              <div style={{ color: colors.muted, lineHeight: 1.7, marginBottom: 16 }}>
+                                {selectedIncident.incident_report.executive_summary}
+                              </div>
+                              <div style={metaGridStyle}>
+                                <Field label="Response" value={selectedIncident.incident_report.response} />
+                                <Field label="Policy mode" value={selectedIncident.incident_report.automation?.policy_mode} />
+                                <Field label="Execution mode" value={selectedIncident.incident_report.automation?.execution_mode} />
+                              </div>
+                            </>
+                          ) : (
+                            <EmptyState title="Report pending" body="The final report appears after the response path completes." />
+                          )}
+                        </Section>
+                      </div>
+                    ) : (
+                      <EmptyState title="Choose an incident" body="Select an incident from the queue to inspect its agent trace, evidence, and automation policy." />
                     )}
                   </div>
                 </div>
               </Section>
             </>
-          ) : (
-            <div style={emptyStateStyle}>Select a website to continue.</div>
-          )}
+          ) : null}
         </main>
       </div>
     </div>
   );
 }
 
-function StatCard({ label, value }) {
-  return (
-    <div style={statCardStyle}>
-      <div style={eyebrowStyle}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 700 }}>{value}</div>
-    </div>
-  );
-}
-
 const pageStyle = {
   minHeight: "100vh",
-  background: colors.background,
+  background: "radial-gradient(circle at top left, #fff7ea 0%, #f3efe7 45%, #ece6da 100%)",
   color: colors.text,
-  fontFamily: 'ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif',
-  padding: 24,
-  boxSizing: "border-box",
+  padding: "28px 28px 40px",
+  fontFamily: '"Avenir Next", "Segoe UI", sans-serif',
 };
 
 const heroWrapStyle = {
   display: "grid",
-  gridTemplateColumns: "minmax(0, 1fr) 380px",
+  gridTemplateColumns: "minmax(0, 1.2fr) minmax(360px, 420px)",
   gap: 24,
-  maxWidth: 1180,
-  margin: "80px auto",
   alignItems: "center",
+  maxWidth: 1180,
+  margin: "40px auto",
 };
 
-const authCardStyle = {
-  background: colors.panel,
-  border: `1px solid ${colors.border}`,
-  borderRadius: 14,
-  padding: 24,
+const heroTitleStyle = {
+  fontSize: 54,
+  lineHeight: 1.05,
+  fontWeight: 800,
+  letterSpacing: -1.6,
+  marginBottom: 16,
+};
+
+const heroBodyStyle = {
+  color: colors.muted,
+  fontSize: 18,
+  lineHeight: 1.8,
+  maxWidth: 620,
+};
+
+const heroBadgeRowStyle = {
   display: "flex",
-  flexDirection: "column",
-  gap: 12,
+  gap: 10,
+  flexWrap: "wrap",
+  marginTop: 24,
 };
 
 const topBarStyle = {
   display: "flex",
   justifyContent: "space-between",
+  gap: 20,
   alignItems: "flex-start",
-  gap: 16,
-  maxWidth: 1480,
-  margin: "0 auto 20px",
+  marginBottom: 24,
   flexWrap: "wrap",
 };
 
-const mainGridStyle = {
+const dashboardLayoutStyle = {
   display: "grid",
   gridTemplateColumns: "320px minmax(0, 1fr)",
   gap: 20,
-  maxWidth: 1480,
-  margin: "0 auto",
+  alignItems: "start",
 };
 
 const sidebarStyle = {
   display: "flex",
   flexDirection: "column",
-  gap: 16,
+  gap: 20,
 };
 
 const sectionStyle = {
-  background: colors.panel,
+  background: "rgba(255,255,255,0.9)",
   border: `1px solid ${colors.border}`,
-  borderRadius: 12,
-  padding: 20,
+  borderRadius: 28,
+  padding: 22,
+  boxShadow: "0 18px 50px rgba(31,27,22,0.06)",
+};
+
+const sectionHeaderStyle = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  alignItems: "flex-start",
   marginBottom: 16,
+  flexWrap: "wrap",
+};
+
+const eyebrowStyle = {
+  color: colors.gold,
+  fontSize: 11,
+  fontWeight: 800,
+  letterSpacing: 1.2,
+  textTransform: "uppercase",
+  marginBottom: 6,
+};
+
+const authCardStyle = {
+  background: "linear-gradient(180deg, rgba(255,255,255,0.97), rgba(249,243,231,0.98))",
+  border: `1px solid ${colors.border}`,
+  borderRadius: 30,
+  padding: 24,
+  boxShadow: "0 20px 60px rgba(31,27,22,0.08)",
+  display: "flex",
+  flexDirection: "column",
+  gap: 12,
+};
+
+const setupCardStyle = {
+  maxWidth: 920,
+  margin: "20px auto",
+  background: "rgba(255,255,255,0.94)",
+  border: `1px solid ${colors.border}`,
+  borderRadius: 28,
+  padding: 28,
+  boxShadow: "0 18px 50px rgba(31,27,22,0.06)",
 };
 
 const inputStyle = {
   width: "100%",
-  padding: "12px 14px",
-  borderRadius: 10,
+  padding: "14px 16px",
+  borderRadius: 16,
   border: `1px solid ${colors.border}`,
   outline: "none",
-  fontSize: 14,
+  fontSize: 15,
+  background: colors.canvas,
   boxSizing: "border-box",
-};
-
-const primaryButtonStyle = {
-  border: "none",
-  borderRadius: 10,
-  padding: "11px 14px",
-  background: colors.text,
-  color: "#ffffff",
-  fontWeight: 600,
-  cursor: "pointer",
-};
-
-const secondaryButtonStyle = {
-  border: `1px solid ${colors.border}`,
-  borderRadius: 10,
-  padding: "11px 14px",
-  background: colors.panel,
-  color: colors.text,
-  fontWeight: 600,
-  cursor: "pointer",
-};
-
-const errorStyle = {
-  background: "#fff1f1",
-  border: `1px solid #f1d1d1`,
-  color: colors.red,
-  padding: "10px 12px",
-  borderRadius: 10,
-};
-
-const setupCardStyle = {
-  maxWidth: 760,
-  margin: "40px auto",
-  background: colors.panel,
-  border: `1px solid ${colors.border}`,
-  borderRadius: 14,
-  padding: 24,
 };
 
 const formGridStyle = {
   display: "grid",
-  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
   gap: 12,
   marginBottom: 16,
 };
 
-const websiteButtonStyle = {
-  textAlign: "left",
+const primaryButtonStyle = {
+  padding: "12px 18px",
+  borderRadius: 16,
+  border: "none",
+  background: "linear-gradient(135deg, #1f5eff 0%, #123bb0 100%)",
+  color: "#fff",
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
+const secondaryButtonStyle = {
+  padding: "12px 18px",
+  borderRadius: 16,
   border: `1px solid ${colors.border}`,
-  borderRadius: 10,
-  padding: 12,
+  background: colors.panel,
+  color: colors.text,
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
+const dangerButtonStyle = {
+  padding: "12px 18px",
+  borderRadius: 16,
+  border: "none",
+  background: "linear-gradient(135deg, #d74d38 0%, #a82f26 100%)",
+  color: "#fff",
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
+const errorStyle = {
+  marginBottom: 18,
+  borderRadius: 16,
+  border: `1px solid ${colors.red}`,
+  background: `${colors.red}14`,
+  padding: "12px 14px",
+  color: colors.red,
+};
+
+const projectCardStyle = {
+  width: "100%",
+  borderRadius: 20,
+  border: `1px solid ${colors.border}`,
+  padding: 16,
+  textAlign: "left",
   cursor: "pointer",
 };
 
 const feedCardStyle = {
-  background: colors.panelAlt,
+  borderRadius: 18,
   border: `1px solid ${colors.border}`,
-  borderRadius: 10,
-  padding: 12,
+  padding: 14,
+  background: colors.canvas,
 };
 
 const statsGridStyle = {
@@ -923,44 +1297,182 @@ const statsGridStyle = {
   gap: 14,
 };
 
-const miniStatsGridStyle = {
-  display: "grid",
-  gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-  gap: 12,
-  marginBottom: 16,
-};
-
 const statCardStyle = {
-  background: colors.panel,
+  background: "rgba(255,255,255,0.92)",
   border: `1px solid ${colors.border}`,
-  borderRadius: 12,
-  padding: "16px 18px",
+  borderRadius: 22,
+  padding: 18,
 };
 
-const eyebrowStyle = {
-  color: colors.subtle,
-  fontSize: 12,
-  fontWeight: 600,
-  marginBottom: 6,
+const heroPanelStyle = {
+  display: "grid",
+  gridTemplateColumns: "minmax(0, 1fr) minmax(320px, 380px)",
+  gap: 18,
+  alignItems: "start",
 };
 
-const monoBoxStyle = {
-  background: "#fafaf9",
+const collectorCardStyle = {
+  background: "linear-gradient(135deg, rgba(17,33,59,0.96), rgba(31,94,255,0.92))",
+  color: "#fff",
+  borderRadius: 22,
+  padding: 18,
+  minHeight: 120,
+  display: "flex",
+  flexDirection: "column",
+  gap: 12,
+};
+
+const integrationGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "minmax(0, 1.15fr) minmax(320px, 0.85fr)",
+  gap: 16,
+  alignItems: "start",
+};
+
+const integrationPanelStyle = {
+  borderRadius: 24,
   border: `1px solid ${colors.border}`,
-  borderRadius: 10,
-  padding: 12,
-  fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
-  color: colors.text,
-  overflowX: "auto",
+  background: colors.canvas,
+  padding: 20,
+};
+
+const codePanelStyle = {
+  borderRadius: 24,
+  padding: 20,
+  background: "linear-gradient(180deg, #14233e, #0c1630)",
+  color: "#edf4ff",
+  border: "1px solid rgba(255,255,255,0.08)",
+};
+
+const codeBlockStyle = {
+  margin: 0,
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
   fontSize: 13,
-  lineHeight: 1.6,
+  lineHeight: 1.7,
+  fontFamily: '"SFMono-Regular", Consolas, monospace',
 };
 
-const emptyStateStyle = {
-  background: colors.panel,
-  border: `1px solid ${colors.border}`,
-  borderRadius: 12,
-  padding: 30,
-  color: colors.muted,
-  textAlign: "center",
+const tokenStyle = {
+  fontFamily: '"SFMono-Regular", Consolas, monospace',
+  fontSize: 13,
+  lineHeight: 1.7,
+  background: "rgba(255,255,255,0.14)",
+  borderRadius: 14,
+  padding: "10px 12px",
+  wordBreak: "break-all",
 };
+
+const tableWrapStyle = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 10,
+};
+
+const tableRowStyle = {
+  display: "flex",
+  gap: 12,
+  alignItems: "flex-start",
+  padding: 14,
+  borderRadius: 18,
+  background: colors.canvas,
+  border: `1px solid ${colors.border}`,
+};
+
+const incidentLayoutStyle = {
+  display: "grid",
+  gridTemplateColumns: "320px minmax(0, 1fr)",
+  gap: 16,
+  alignItems: "start",
+};
+
+const detailHeroStyle = {
+  padding: 20,
+  borderRadius: 24,
+  background: "linear-gradient(135deg, rgba(255,248,230,0.95), rgba(255,255,255,0.95))",
+  border: `1px solid ${colors.border}`,
+};
+
+const dummySiteShellStyle = {
+  borderRadius: 28,
+  overflow: "hidden",
+  background: "linear-gradient(180deg, #132440 0%, #0f1730 100%)",
+  color: "#fff",
+  border: "1px solid rgba(16,33,59,0.12)",
+};
+
+const dummyNavStyle = {
+  padding: "18px 20px",
+  borderBottom: "1px solid rgba(255,255,255,0.08)",
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 16,
+  alignItems: "center",
+  flexWrap: "wrap",
+};
+
+const dummyHeroGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "minmax(0, 1.2fr) minmax(280px, 0.8fr)",
+  gap: 18,
+  padding: 22,
+  alignItems: "start",
+};
+
+const sitePrimaryButtonStyle = {
+  padding: "12px 18px",
+  borderRadius: 16,
+  border: "none",
+  background: "linear-gradient(135deg, #ffd166 0%, #e89d1b 100%)",
+  color: "#1c1b16",
+  fontWeight: 800,
+  cursor: "pointer",
+};
+
+const siteSecondaryButtonStyle = {
+  padding: "12px 18px",
+  borderRadius: 16,
+  border: "1px solid rgba(255,255,255,0.18)",
+  background: "rgba(255,255,255,0.08)",
+  color: "#fff",
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
+const siteAlertButtonStyle = {
+  padding: "12px 18px",
+  borderRadius: 16,
+  border: "none",
+  background: "linear-gradient(135deg, #ff7a59 0%, #d94a34 100%)",
+  color: "#fff",
+  fontWeight: 800,
+  cursor: "pointer",
+};
+
+const siteInfoPanelStyle = {
+  borderRadius: 22,
+  background: "rgba(255,255,255,0.06)",
+  border: "1px solid rgba(255,255,255,0.08)",
+  padding: 18,
+};
+
+const siteInfoCardStyle = {
+  borderRadius: 16,
+  background: "rgba(255,255,255,0.06)",
+  padding: 14,
+};
+
+const traceCardStyle = {
+  borderRadius: 18,
+  border: `1px solid ${colors.border}`,
+  padding: 14,
+  background: colors.canvas,
+};
+
+const metaGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+  gap: 14,
+};
+
+export default App;
