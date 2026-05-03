@@ -6,20 +6,20 @@ const WS_URL = "ws://localhost:8000/ws";
 const TOKEN_KEY = "cyberagent_token";
 
 const colors = {
-  background: "#0b1220",
-  canvas: "#111a2e",
-  panel: "#0f172a",
-  panelAlt: "#16213a",
-  border: "#24324d",
-  text: "#e5edf9",
-  muted: "#93a4bf",
-  subtle: "#6f83a3",
-  green: "#1f9d68",
-  red: "#d84f57",
-  amber: "#d4a72c",
-  blue: "#4c8dff",
-  gold: "#7fb1ff",
-  ink: "#08111f",
+  background: "#0c0c0d",
+  canvas: "#131314",
+  panel: "#131314",
+  panelAlt: "#1a1a1b",
+  border: "#232326",
+  text: "#f4f4f5",
+  muted: "#a1a1aa",
+  subtle: "#71717a",
+  green: "#34d399",
+  red: "#f87171",
+  amber: "#f59e0b",
+  blue: "#8b5cf6",
+  gold: "#a78bfa",
+  ink: "#09090b",
 };
 
 const severityColors = {
@@ -34,109 +34,6 @@ const policyColors = {
   approval_required: colors.amber,
   manual_escalation: colors.red,
 };
-
-function isoNow() {
-  return new Date().toISOString();
-}
-
-function accessEvent(srcIp, path, method = "GET", statusCode = 200, userAgent = "novacart-browser", bytes = 512) {
-  const timestamp = isoNow();
-  return {
-    event_type: "access",
-    timestamp,
-    src_ip: srcIp,
-    path,
-    method,
-    status_code: statusCode,
-    bytes_sent: bytes,
-    user_agent: userAgent,
-    message: `${timestamp} ACCESS src=${srcIp} method=${method} path=${path} status=${statusCode} bytes=${bytes} user_agent=${userAgent}`,
-  };
-}
-
-function authEvent(srcIp, username, result, port = 22) {
-  const timestamp = isoNow();
-  return {
-    event_type: "auth",
-    timestamp,
-    src_ip: srcIp,
-    username,
-    result,
-    port,
-    message: `${timestamp} AUTH service=sshd src=${srcIp} user=${username} result=${result} port=${port}`,
-  };
-}
-
-function networkEvent(srcIp, dstIp, port, packets, bytes, flags = "ACK") {
-  const timestamp = isoNow();
-  return {
-    event_type: "network",
-    timestamp,
-    src_ip: srcIp,
-    dst_ip: dstIp,
-    port,
-    protocol: "TCP",
-    packets,
-    bytes_sent: bytes,
-    flags,
-    message: `${timestamp} NETFLOW src=${srcIp} dst=${dstIp}:${port} proto=TCP packets=${packets} bytes=${bytes} flags=${flags}`,
-  };
-}
-
-function buildCollectorScenarioPayload(kind, website) {
-  const sourceLabel = `${website?.name || "NovaCart"} demo website collector`;
-  const targetIp = "10.0.0.12";
-  const customerIp = "198.51.100.24";
-
-  if (kind === "normal") {
-    return {
-      source_label: sourceLabel,
-      run_detection: false,
-      events: [
-        accessEvent(customerIp, "/"),
-        accessEvent(customerIp, "/products"),
-        accessEvent(customerIp, "/checkout", "POST", 200, "novacart-browser", 920),
-      ],
-    };
-  }
-
-  if (kind === "bruteforce") {
-    return {
-      source_label: sourceLabel,
-      run_detection: true,
-      events: [
-        ...Array.from({ length: 12 }, () => authEvent(customerIp, "admin", "FAILED", 22)),
-        ...Array.from({ length: 8 }, () => networkEvent(customerIp, targetIp, 22, 130, 4600, "ACK")),
-        accessEvent(customerIp, "/admin/login", "POST", 401, "credential-checker", 742),
-      ],
-    };
-  }
-
-  if (kind === "recon") {
-    const paths = ["/admin", "/admin/login", "/.env", "/config.php", "/server-status", "/backup.zip", "/wp-admin"];
-    return {
-      source_label: sourceLabel,
-      run_detection: true,
-      events: [
-        ...paths.map((path) => accessEvent(customerIp, path, "GET", 403, "recon-bot", 228)),
-        ...paths.map(() => networkEvent(customerIp, targetIp, 443, 16, 920, "SYN")),
-      ],
-    };
-  }
-
-  return {
-    source_label: sourceLabel,
-    run_detection: true,
-    events: [
-      ...Array.from({ length: 28 }, (_, index) =>
-        accessEvent(`203.0.113.${20 + (index % 10)}`, ["/", "/products", "/login", "/api/search"][index % 4], "GET", 200, "loadbot", 1400)
-      ),
-      ...Array.from({ length: 28 }, (_, index) =>
-        networkEvent(`203.0.113.${20 + (index % 10)}`, targetIp, 443, 6000 + index * 100, 280000 + index * 1000, "SYN")
-      ),
-    ],
-  };
-}
 
 function authHeaders(token) {
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -225,6 +122,29 @@ function EmptyState({ title, body }) {
   );
 }
 
+function IconButton({ onClick, children, active = false, title }) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      style={{
+        width: 38,
+        height: 38,
+        borderRadius: 14,
+        border: `1px solid ${active ? "#3b2a47" : colors.border}`,
+        background: active ? "rgba(167, 139, 250, 0.12)" : colors.panelAlt,
+        color: active ? colors.text : colors.muted,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        cursor: "pointer",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
 function App() {
   const [mode, setMode] = useState("login");
   const [token, setToken] = useState(localStorage.getItem(TOKEN_KEY) || "");
@@ -239,15 +159,18 @@ function App() {
   const [connected, setConnected] = useState(false);
   const [autoRunning, setAutoRunning] = useState(false);
   const [decisionLoading, setDecisionLoading] = useState({});
-  const [collectorLoading, setCollectorLoading] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const reconnectRef = useRef(null);
+  const notificationsRef = useRef(null);
+  const profileMenuRef = useRef(null);
 
   const [authForm, setAuthForm] = useState({ name: "", email: "", password: "" });
   const [websiteForm, setWebsiteForm] = useState({ name: "", domain: "", environment: "production" });
   const [currentTab, setCurrentTab] = useState("dashboard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
 
   useEffect(() => {
     if (!token) {
@@ -394,6 +317,20 @@ function App() {
     };
   }, [selectedWebsiteId, token]);
 
+  useEffect(() => {
+    function handlePointerDown(event) {
+      if (showNotifications && notificationsRef.current && !notificationsRef.current.contains(event.target)) {
+        setShowNotifications(false);
+      }
+      if (showProfileMenu && profileMenuRef.current && !profileMenuRef.current.contains(event.target)) {
+        setShowProfileMenu(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [showNotifications, showProfileMenu]);
+
   const selectedWebsite = websites.find((website) => website._id === selectedWebsiteId) || null;
   const websiteIncidents = useMemo(
     () =>
@@ -414,6 +351,24 @@ function App() {
     }),
     [websiteIncidents]
   );
+
+  const notificationItems = useMemo(() => {
+    const items = [];
+    const pending = websiteIncidents.filter((incident) => incident.approval_status === "pending").length;
+    if (pending) {
+      items.push({
+        title: `${pending} pending approval${pending > 1 ? "s" : ""}`,
+        detail: "Containment is waiting for analyst approval.",
+      });
+    }
+    feed.slice(0, 4).forEach((entry) => {
+      items.push({
+        title: entry.data.agent_trace_entry?.agent || entry.type,
+        detail: entry.data.message || entry.data.current_stage || "New orchestration activity.",
+      });
+    });
+    return items.slice(0, 5);
+  }, [feed, websiteIncidents]);
 
   async function submitAuth(targetMode) {
     try {
@@ -475,27 +430,6 @@ function App() {
     }
   }
 
-  async function refreshWebsiteData() {
-    if (!token || !selectedWebsiteId) {
-      return;
-    }
-    const [websiteIncidents, telemetryData, integrationData] = await Promise.all([
-      apiFetch(`/websites/${selectedWebsiteId}/incidents`, {}, token),
-      apiFetch(`/websites/${selectedWebsiteId}/telemetry`, {}, token),
-      apiFetch(`/websites/${selectedWebsiteId}/integration`, {}, token),
-    ]);
-    setIncidents((current) => {
-      const next = { ...current };
-      websiteIncidents.forEach((incident) => {
-        next[incident.attack_id] = incident;
-      });
-      return next;
-    });
-    setTelemetry(telemetryData);
-    setIntegration(integrationData);
-    setSelectedIncidentId((current) => current || websiteIncidents[0]?.attack_id || "");
-  }
-
   async function toggleAuto() {
     if (!selectedWebsiteId) {
       return;
@@ -528,34 +462,6 @@ function App() {
     }
   }
 
-  async function runCollectorScenario(kind) {
-    if (!selectedWebsite?.collector?.ingest_token) {
-      return;
-    }
-    try {
-      setCollectorLoading(kind);
-      setError("");
-      const payload = buildCollectorScenarioPayload(kind, selectedWebsite);
-      const response = await fetch(`${API_BASE}/collector/ingest`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Collector-Token": selectedWebsite.collector.ingest_token,
-        },
-        body: JSON.stringify(payload),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(data.detail || "Collector ingestion failed");
-      }
-      await refreshWebsiteData();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setCollectorLoading("");
-    }
-  }
-
   function logout() {
     localStorage.removeItem(TOKEN_KEY);
     setToken("");
@@ -566,61 +472,112 @@ function App() {
     setIncidents({});
     setFeed([]);
     setIntegration(null);
+    setShowNotifications(false);
+    setShowProfileMenu(false);
   }
 
   if (!user) {
     return (
       <div style={pageStyle}>
-        <div style={heroWrapStyle}>
-          <div style={{ maxWidth: 620 }}>
-            <div style={eyebrowStyle}>Autonomous AI SOC</div>
-            <div style={heroTitleStyle}>Multi-agent cyber defense for startups with 70% automated response.</div>
-            <div style={heroBodyStyle}>
-              Connect application, authentication, and network telemetry. Watch cooperating AI agents normalize,
-              detect, investigate, classify, plan, and either auto-contain threats or escalate them for approval.
+        <div style={landingGlowWrapStyle}>
+          <div style={landingGlowPrimaryStyle} />
+          <div style={landingGlowSecondaryStyle} />
+        </div>
+
+        <div style={landingShellStyle}>
+          <header style={landingHeaderStyle}>
+            <div style={landingBrandStyle}>
+              <div style={landingBrandMarkStyle}>C</div>
+              <div>
+                <div style={landingBrandNameStyle}>CyberAgent</div>
+                <div style={landingBrandSubStyle}>Autonomous AI SOC for startups</div>
+              </div>
             </div>
-            <div style={heroBadgeRowStyle}>
-              <StatusPill color={colors.green}>Collector-driven telemetry</StatusPill>
-              <StatusPill color={colors.blue}>Agent traceable investigations</StatusPill>
-              <StatusPill color={colors.amber}>Human oversight for risky actions</StatusPill>
+            <nav style={landingNavStyle}>
+              <span>How it works</span>
+              <span>Features</span>
+              <span>Security</span>
+              <span>Reviews</span>
+            </nav>
+          </header>
+
+          <div style={heroWrapStyle}>
+            <div style={{ maxWidth: 700 }}>
+              <div style={landingBadgeStyle}>Featured architecture: hybrid AI + SOC automation</div>
+              <div style={heroTitleStyle}>
+                Multi-agent cyber defense for modern startups and customer-facing applications.
+              </div>
+              <div style={heroBodyStyle}>
+                Ingest application, authentication, and network telemetry into one autonomous platform that
+                detects threats, coordinates specialist agents, and keeps humans in control only when response
+                risk is high.
+              </div>
+              <div style={heroBadgeRowStyle}>
+                <StatusPill color={colors.green}>Collector-based onboarding</StatusPill>
+                <StatusPill color={colors.blue}>Agent-to-agent handoffs</StatusPill>
+                <StatusPill color={colors.amber}>70% automation, 30% oversight</StatusPill>
+              </div>
+              <div style={landingStatRowStyle}>
+                <div style={landingStatStyle}>
+                  <div style={landingStatValueStyle}>3</div>
+                  <div style={landingStatLabelStyle}>Telemetry channels</div>
+                </div>
+                <div style={landingStatStyle}>
+                  <div style={landingStatValueStyle}>9</div>
+                  <div style={landingStatLabelStyle}>Agent stages</div>
+                </div>
+                <div style={landingStatStyle}>
+                  <div style={landingStatValueStyle}>Live</div>
+                  <div style={landingStatLabelStyle}>SOC dashboard</div>
+                </div>
+              </div>
+            </div>
+
+            <div style={authCardStyle}>
+              <div style={authCardHeaderStyle}>
+                <div style={{ display: "flex", gap: 10 }}>
+                  <button onClick={() => setMode("login")} style={mode === "login" ? primaryButtonStyle : secondaryButtonStyle}>
+                    Log in
+                  </button>
+                  <button onClick={() => setMode("signup")} style={mode === "signup" ? primaryButtonStyle : secondaryButtonStyle}>
+                    Sign up
+                  </button>
+                </div>
+                <div style={authCardSubStyle}>
+                  {mode === "signup" ? "Create your protected workspace" : "Access your SOC workspace"}
+                </div>
+              </div>
+              {mode === "signup" ? (
+                <input
+                  value={authForm.name}
+                  onChange={(event) => setAuthForm((current) => ({ ...current, name: event.target.value }))}
+                  placeholder="Full name"
+                  style={inputStyle}
+                />
+              ) : null}
+              <input
+                value={authForm.email}
+                onChange={(event) => setAuthForm((current) => ({ ...current, email: event.target.value }))}
+                placeholder="Work email"
+                style={inputStyle}
+              />
+              <input
+                type="password"
+                value={authForm.password}
+                onChange={(event) => setAuthForm((current) => ({ ...current, password: event.target.value }))}
+                placeholder="Password"
+                style={inputStyle}
+              />
+              {error ? <div style={errorStyle}>{error}</div> : null}
+              <button onClick={() => submitAuth(mode)} style={primaryButtonStyle} disabled={loading}>
+                {loading ? "Working..." : mode === "signup" ? "Create workspace" : "Enter dashboard"}
+              </button>
             </div>
           </div>
 
-          <div style={authCardStyle}>
-            <div style={{ display: "flex", gap: 10, marginBottom: 18 }}>
-              <button onClick={() => setMode("login")} style={mode === "login" ? primaryButtonStyle : secondaryButtonStyle}>
-                Log in
-              </button>
-              <button onClick={() => setMode("signup")} style={mode === "signup" ? primaryButtonStyle : secondaryButtonStyle}>
-                Sign up
-              </button>
-            </div>
-            {mode === "signup" ? (
-              <input
-                value={authForm.name}
-                onChange={(event) => setAuthForm((current) => ({ ...current, name: event.target.value }))}
-                placeholder="Name"
-                style={inputStyle}
-              />
-            ) : null}
-            <input
-              value={authForm.email}
-              onChange={(event) => setAuthForm((current) => ({ ...current, email: event.target.value }))}
-              placeholder="Email"
-              style={inputStyle}
-            />
-            <input
-              type="password"
-              value={authForm.password}
-              onChange={(event) => setAuthForm((current) => ({ ...current, password: event.target.value }))}
-              placeholder="Password"
-              style={inputStyle}
-            />
-            {error ? <div style={errorStyle}>{error}</div> : null}
-            <button onClick={() => submitAuth(mode)} style={primaryButtonStyle} disabled={loading}>
-              {loading ? "Working..." : mode === "signup" ? "Create workspace" : "Log in"}
-            </button>
-          </div>
+          <footer style={landingFooterStyle}>
+            <span>Integrates with startup web apps, auth services, collector agents, and network telemetry pipelines</span>
+          </footer>
         </div>
       </div>
     );
@@ -629,46 +586,58 @@ function App() {
   if (!websites.length) {
     return (
       <div style={pageStyle}>
+        <div style={landingGlowWrapStyle}>
+          <div style={landingGlowPrimaryStyle} />
+          <div style={landingGlowSecondaryStyle} />
+        </div>
         <div style={topBarStyle}>
           <div>
-            <div style={eyebrowStyle}>Workspace</div>
+            <div style={eyebrowStyle}>Workspace setup</div>
             <div style={{ fontSize: 30, fontWeight: 700 }}>{user.name}</div>
           </div>
           <button onClick={logout} style={secondaryButtonStyle}>
             Log out
           </button>
         </div>
-        <div style={setupCardStyle}>
-          <div style={eyebrowStyle}>Protected project</div>
-          <div style={{ fontSize: 30, fontWeight: 700, marginBottom: 10 }}>Create your first monitored startup app</div>
-          <div style={{ color: colors.muted, lineHeight: 1.7, marginBottom: 18 }}>
-            This creates a tenant-scoped project, collector token, telemetry store, and autonomous agent workflow so
-            you can demo the complete SaaS flow right away.
+        <div style={setupSplitStyle}>
+          <div style={setupIntroStyle}>
+            <div style={landingBadgeStyle}>Protected project onboarding</div>
+            <div style={{ fontSize: 48, lineHeight: 1.05, fontWeight: 800, marginBottom: 16 }}>
+              Create the first monitored application in your SOC workspace.
+            </div>
+            <div style={{ color: colors.muted, lineHeight: 1.8, fontSize: 17 }}>
+              We’ll provision a tenant-scoped project, generate a collector token, enable telemetry ingestion,
+              and prepare the full multi-agent response workflow for live incidents.
+            </div>
           </div>
-          <div style={formGridStyle}>
-            <input
-              value={websiteForm.name}
-              onChange={(event) => setWebsiteForm((current) => ({ ...current, name: event.target.value }))}
-              placeholder="Project name"
-              style={inputStyle}
-            />
-            <input
-              value={websiteForm.domain}
-              onChange={(event) => setWebsiteForm((current) => ({ ...current, domain: event.target.value }))}
-              placeholder="Domain"
-              style={inputStyle}
-            />
-            <input
-              value={websiteForm.environment}
-              onChange={(event) => setWebsiteForm((current) => ({ ...current, environment: event.target.value }))}
-              placeholder="Environment"
-              style={inputStyle}
-            />
+          <div style={setupCardStyle}>
+            <div style={eyebrowStyle}>Protected project</div>
+            <div style={{ fontSize: 28, fontWeight: 700, marginBottom: 12 }}>Project details</div>
+            <div style={formGridStyle}>
+              <input
+                value={websiteForm.name}
+                onChange={(event) => setWebsiteForm((current) => ({ ...current, name: event.target.value }))}
+                placeholder="Project name"
+                style={inputStyle}
+              />
+              <input
+                value={websiteForm.domain}
+                onChange={(event) => setWebsiteForm((current) => ({ ...current, domain: event.target.value }))}
+                placeholder="Domain"
+                style={inputStyle}
+              />
+              <input
+                value={websiteForm.environment}
+                onChange={(event) => setWebsiteForm((current) => ({ ...current, environment: event.target.value }))}
+                placeholder="Environment"
+                style={inputStyle}
+              />
+            </div>
+            {error ? <div style={errorStyle}>{error}</div> : null}
+            <button onClick={createWebsite} style={primaryButtonStyle} disabled={loading}>
+              {loading ? "Creating..." : "Create protected project"}
+            </button>
           </div>
-          {error ? <div style={errorStyle}>{error}</div> : null}
-          <button onClick={createWebsite} style={primaryButtonStyle} disabled={loading}>
-            {loading ? "Creating..." : "Create protected project"}
-          </button>
         </div>
       </div>
     );
@@ -696,9 +665,9 @@ function App() {
           </button>
         </div>
         <div className="sidebar-footer">
-          <button className="nav-item" onClick={logout}>
+          <button className="nav-item" onClick={() => setCurrentTab('telemetry')}>
             <Settings className="nav-item-icon" size={20} />
-            {!sidebarCollapsed && <span>Settings & Logout</span>}
+            {!sidebarCollapsed && <span>Workspace Settings</span>}
           </button>
         </div>
       </aside>
@@ -714,15 +683,60 @@ function App() {
               <input type="text" placeholder="Search incidents, IPs, policies..." />
             </div>
           </div>
-          <div className="flex-gap">
+          <div className="flex-gap" style={{position: 'relative'}}>
             <StatusPill color={connected ? "var(--color-green)" : "var(--color-red)"}>
               {connected ? "Realtime Active" : "Disconnected"}
             </StatusPill>
-            <button className="btn" style={{background: 'transparent', border: 'none', color: 'var(--text-muted)'}}>
-              <Bell size={20} />
-            </button>
-            <div style={{width: 36, height: 36, borderRadius: '50%', background: 'var(--color-blue)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', color: '#fff'}}>
-              {user?.name?.charAt(0) || 'A'}
+            <div style={{position: 'relative'}} ref={notificationsRef}>
+              <IconButton
+                onClick={() => {
+                  setShowNotifications((current) => !current);
+                  setShowProfileMenu(false);
+                }}
+                active={showNotifications}
+                title="Notifications"
+              >
+                <Bell size={18} />
+              </IconButton>
+              {showNotifications ? (
+                <div style={menuPanelStyle}>
+                  <div style={menuPanelHeaderStyle}>Notifications</div>
+                  {notificationItems.length ? (
+                    notificationItems.map((item, index) => (
+                      <div key={`${item.title}-${index}`} style={menuItemStyle}>
+                        <div style={{fontWeight: 600, fontSize: 13, color: colors.text, marginBottom: 4}}>{item.title}</div>
+                        <div style={{fontSize: 12, color: colors.muted, lineHeight: 1.5}}>{item.detail}</div>
+                      </div>
+                    ))
+                  ) : (
+                    <div style={menuEmptyStyle}>No new notifications</div>
+                  )}
+                </div>
+              ) : null}
+            </div>
+            <div style={{position: 'relative'}} ref={profileMenuRef}>
+              <button
+                onClick={() => {
+                  setShowProfileMenu((current) => !current);
+                  setShowNotifications(false);
+                }}
+                style={profileButtonStyle}
+                title="Profile menu"
+              >
+                {user?.name?.charAt(0)?.toUpperCase() || 'A'}
+              </button>
+              {showProfileMenu ? (
+                <div style={{...menuPanelStyle, right: 0, width: 220}}>
+                  <div style={menuPanelHeaderStyle}>Signed in as</div>
+                  <div style={{padding: "0 14px 14px"}}>
+                    <div style={{fontWeight: 700, color: colors.text}}>{user?.name || "Analyst"}</div>
+                    <div style={{fontSize: 12, color: colors.muted, marginTop: 4}}>{user?.email || ""}</div>
+                  </div>
+                  <button style={menuActionButtonStyle} onClick={logout}>
+                    Log out
+                  </button>
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
@@ -750,7 +764,7 @@ function App() {
                     <div className="card">
                       <div className="card-header">
                         <div className="card-title">Total Events</div>
-                        <Activity size={20} color="var(--color-blue)" />
+                        <Activity size={20} color={colors.gold} />
                       </div>
                       <div className="card-value">{telemetry.total_events || 0}</div>
                       <div style={{color: 'var(--text-subtle)', fontSize: 13}}>Collector-fed data</div>
@@ -758,7 +772,7 @@ function App() {
                     <div className="card">
                       <div className="card-header">
                         <div className="card-title">Incidents</div>
-                        <ShieldAlert size={20} color="var(--color-amber)" />
+                        <ShieldAlert size={20} color={colors.amber} />
                       </div>
                       <div className="card-value">{stats.incidents}</div>
                       <div style={{color: 'var(--text-subtle)', fontSize: 13}}>Detected across project</div>
@@ -766,7 +780,7 @@ function App() {
                     <div className="card">
                       <div className="card-header">
                         <div className="card-title">Auto-executed</div>
-                        <Settings size={20} color="var(--color-green)" />
+                        <Settings size={20} color={colors.green} />
                       </div>
                       <div className="card-value">{stats.autoExecuted}</div>
                       <div style={{color: 'var(--text-subtle)', fontSize: 13}}>Resolved autonomously</div>
@@ -774,7 +788,7 @@ function App() {
                     <div className="card">
                       <div className="card-header">
                         <div className="card-title">Pending Approvals</div>
-                        <Bell size={20} color="var(--color-red)" />
+                        <Bell size={20} color={colors.red} />
                       </div>
                       <div className="card-value">{stats.approvals}</div>
                       <div style={{color: 'var(--text-subtle)', fontSize: 13}}>Queued for decision</div>
@@ -786,7 +800,7 @@ function App() {
                       <div className="card-title" style={{marginBottom: 16}}>Live Orchestration Feed</div>
                       <div style={{display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 400, overflowY: 'auto'}}>
                         {feed.filter(e => !selectedWebsiteId || e.data.website_id === selectedWebsiteId).map(entry => (
-                          <div key={entry.id} style={{padding: 12, background: 'rgba(255,255,255,0.03)', borderRadius: 8, borderLeft: `3px solid var(--color-blue)`}}>
+                          <div key={entry.id} style={{padding: 12, background: 'rgba(255,255,255,0.03)', borderRadius: 8, borderLeft: `3px solid ${colors.gold}`}}>
                             <div className="flex-between" style={{marginBottom: 6}}>
                               <span style={{fontSize: 13, fontWeight: 600}}>{entry.data.agent_trace_entry?.agent || entry.type}</span>
                               <span style={{fontSize: 11, color: 'var(--text-subtle)'}}>{new Date(entry.timestamp).toLocaleTimeString()}</span>
@@ -966,34 +980,137 @@ Body: {
 
 const pageStyle = {
   minHeight: "100vh",
-  background: "linear-gradient(180deg, #08101c 0%, #0b1220 48%, #0d1628 100%)",
+  background: "linear-gradient(180deg, #09090b 0%, #0c0c0d 55%, #111114 100%)",
   color: colors.text,
   padding: "28px 28px 40px",
-  fontFamily: '"Inter", "Segoe UI", sans-serif',
+  fontFamily: '"Plus Jakarta Sans", "Inter", "Segoe UI", sans-serif',
+  position: "relative",
+  overflow: "hidden",
+};
+
+const landingGlowWrapStyle = {
+  position: "absolute",
+  inset: 0,
+  overflow: "hidden",
+  pointerEvents: "none",
+};
+
+const landingGlowPrimaryStyle = {
+  position: "absolute",
+  top: "-8%",
+  right: "-6%",
+  width: 520,
+  height: 520,
+  borderRadius: "50%",
+  background: "rgba(139, 92, 246, 0.12)",
+  filter: "blur(120px)",
+};
+
+const landingGlowSecondaryStyle = {
+  position: "absolute",
+  bottom: "8%",
+  left: "-10%",
+  width: 560,
+  height: 560,
+  borderRadius: "50%",
+  background: "rgba(37, 99, 235, 0.08)",
+  filter: "blur(130px)",
+};
+
+const landingShellStyle = {
+  position: "relative",
+  maxWidth: 1380,
+  margin: "0 auto",
+  display: "flex",
+  flexDirection: "column",
+  minHeight: "calc(100vh - 68px)",
+};
+
+const landingHeaderStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 24,
+  padding: "8px 0 18px",
+  flexWrap: "wrap",
+};
+
+const landingBrandStyle = {
+  display: "flex",
+  alignItems: "center",
+  gap: 14,
+};
+
+const landingBrandMarkStyle = {
+  width: 42,
+  height: 42,
+  borderRadius: 12,
+  display: "grid",
+  placeItems: "center",
+  background: "linear-gradient(135deg, #8b5cf6 0%, #4f46e5 100%)",
+  color: "#ffffff",
+  fontWeight: 800,
+  fontSize: 18,
+  boxShadow: "0 0 24px rgba(139, 92, 246, 0.28)",
+};
+
+const landingBrandNameStyle = {
+  fontSize: 22,
+  fontWeight: 800,
+  letterSpacing: -0.4,
+};
+
+const landingBrandSubStyle = {
+  color: colors.muted,
+  fontSize: 13,
+};
+
+const landingNavStyle = {
+  display: "flex",
+  gap: 28,
+  flexWrap: "wrap",
+  color: colors.muted,
+  fontSize: 14,
+};
+
+const landingBadgeStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "8px 14px",
+  borderRadius: 999,
+  border: "1px solid rgba(139, 92, 246, 0.24)",
+  background: "rgba(139, 92, 246, 0.1)",
+  color: "#d8ccff",
+  fontSize: 13,
+  fontWeight: 600,
+  marginBottom: 22,
 };
 
 const heroWrapStyle = {
   display: "grid",
-  gridTemplateColumns: "minmax(0, 1.2fr) minmax(360px, 420px)",
-  gap: 24,
+  gridTemplateColumns: "minmax(0, 1.2fr) minmax(380px, 430px)",
+  gap: 36,
   alignItems: "center",
-  maxWidth: 1180,
-  margin: "40px auto",
+  width: "100%",
+  flex: 1,
+  padding: "48px 0 24px",
 };
 
 const heroTitleStyle = {
-  fontSize: 54,
-  lineHeight: 1.05,
+  fontSize: 62,
+  lineHeight: 1.02,
   fontWeight: 800,
-  letterSpacing: -1.6,
-  marginBottom: 16,
+  letterSpacing: -2,
+  marginBottom: 18,
+  maxWidth: 760,
 };
 
 const heroBodyStyle = {
   color: colors.muted,
   fontSize: 18,
-  lineHeight: 1.8,
-  maxWidth: 620,
+  lineHeight: 1.9,
+  maxWidth: 680,
 };
 
 const heroBadgeRowStyle = {
@@ -1001,6 +1118,32 @@ const heroBadgeRowStyle = {
   gap: 10,
   flexWrap: "wrap",
   marginTop: 24,
+};
+
+const landingStatRowStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(3, minmax(0, 180px))",
+  gap: 14,
+  marginTop: 28,
+};
+
+const landingStatStyle = {
+  padding: "18px 18px 16px",
+  borderRadius: 24,
+  border: `1px solid ${colors.border}`,
+  background: "rgba(19, 19, 20, 0.78)",
+  backdropFilter: "blur(12px)",
+};
+
+const landingStatValueStyle = {
+  fontSize: 24,
+  fontWeight: 800,
+  marginBottom: 6,
+};
+
+const landingStatLabelStyle = {
+  fontSize: 13,
+  color: colors.muted,
 };
 
 const topBarStyle = {
@@ -1026,11 +1169,11 @@ const sidebarStyle = {
 };
 
 const sectionStyle = {
-  background: "linear-gradient(180deg, rgba(15,23,42,0.98), rgba(17,26,46,0.98))",
+  background: "linear-gradient(180deg, rgba(19,19,20,0.98), rgba(26,26,27,0.98))",
   border: `1px solid ${colors.border}`,
-  borderRadius: 20,
+  borderRadius: 32,
   padding: 22,
-  boxShadow: "0 18px 40px rgba(2,6,23,0.35)",
+  boxShadow: "0 22px 42px -24px rgba(0,0,0,0.65)",
 };
 
 const sectionHeaderStyle = {
@@ -1052,34 +1195,70 @@ const eyebrowStyle = {
 };
 
 const authCardStyle = {
-  background: "linear-gradient(180deg, rgba(15,23,42,0.98), rgba(17,26,46,0.98))",
+  background: "linear-gradient(180deg, rgba(19,19,20,0.98), rgba(26,26,27,0.98))",
   border: `1px solid ${colors.border}`,
-  borderRadius: 20,
-  padding: 24,
-  boxShadow: "0 20px 60px rgba(2,6,23,0.35)",
+  borderRadius: 36,
+  padding: 26,
+  boxShadow: "0 24px 70px rgba(0,0,0,0.45)",
   display: "flex",
   flexDirection: "column",
   gap: 12,
+  backdropFilter: "blur(14px)",
+};
+
+const authCardHeaderStyle = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 12,
+  marginBottom: 8,
+};
+
+const authCardSubStyle = {
+  color: colors.muted,
+  fontSize: 14,
 };
 
 const setupCardStyle = {
-  maxWidth: 920,
-  margin: "20px auto",
-  background: "linear-gradient(180deg, rgba(15,23,42,0.98), rgba(17,26,46,0.98))",
+  width: "100%",
+  background: "linear-gradient(180deg, rgba(19,19,20,0.98), rgba(26,26,27,0.98))",
   border: `1px solid ${colors.border}`,
-  borderRadius: 20,
+  borderRadius: 36,
   padding: 28,
-  boxShadow: "0 18px 50px rgba(2,6,23,0.35)",
+  boxShadow: "0 22px 60px rgba(0,0,0,0.45)",
+  backdropFilter: "blur(14px)",
+};
+
+const setupSplitStyle = {
+  position: "relative",
+  display: "grid",
+  gridTemplateColumns: "minmax(0, 1fr) minmax(420px, 520px)",
+  gap: 32,
+  alignItems: "center",
+  maxWidth: 1320,
+  margin: "36px auto 0",
+};
+
+const setupIntroStyle = {
+  maxWidth: 700,
+};
+
+const landingFooterStyle = {
+  marginTop: "auto",
+  paddingTop: 24,
+  borderTop: "1px solid rgba(255,255,255,0.06)",
+  color: colors.subtle,
+  fontSize: 12,
+  letterSpacing: 0.3,
 };
 
 const inputStyle = {
   width: "100%",
   padding: "14px 16px",
-  borderRadius: 12,
+  borderRadius: 18,
   border: `1px solid ${colors.border}`,
   outline: "none",
   fontSize: 15,
-  background: "#0b1326",
+  background: "#1a1a1b",
   color: colors.text,
   boxSizing: "border-box",
 };
@@ -1093,9 +1272,9 @@ const formGridStyle = {
 
 const primaryButtonStyle = {
   padding: "12px 18px",
-  borderRadius: 12,
+  borderRadius: 999,
   border: "none",
-  background: "linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)",
+  background: "linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%)",
   color: "#fff",
   fontWeight: 700,
   cursor: "pointer",
@@ -1103,9 +1282,9 @@ const primaryButtonStyle = {
 
 const secondaryButtonStyle = {
   padding: "12px 18px",
-  borderRadius: 12,
+  borderRadius: 999,
   border: `1px solid ${colors.border}`,
-  background: "#111b31",
+  background: "#1a1a1b",
   color: colors.text,
   fontWeight: 700,
   cursor: "pointer",
@@ -1113,7 +1292,7 @@ const secondaryButtonStyle = {
 
 const dangerButtonStyle = {
   padding: "12px 18px",
-  borderRadius: 12,
+  borderRadius: 999,
   border: "none",
   background: "linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)",
   color: "#fff",
@@ -1132,7 +1311,7 @@ const errorStyle = {
 
 const projectCardStyle = {
   width: "100%",
-  borderRadius: 16,
+  borderRadius: 24,
   border: `1px solid ${colors.border}`,
   padding: 16,
   textAlign: "left",
@@ -1141,10 +1320,10 @@ const projectCardStyle = {
 };
 
 const feedCardStyle = {
-  borderRadius: 14,
+  borderRadius: 22,
   border: `1px solid ${colors.border}`,
   padding: 14,
-  background: "#0b1326",
+  background: colors.panelAlt,
 };
 
 const statsGridStyle = {
@@ -1154,9 +1333,9 @@ const statsGridStyle = {
 };
 
 const statCardStyle = {
-  background: "linear-gradient(180deg, rgba(11,19,38,0.98), rgba(15,23,42,0.98))",
+  background: "linear-gradient(180deg, rgba(19,19,20,0.98), rgba(26,26,27,0.98))",
   border: `1px solid ${colors.border}`,
-  borderRadius: 16,
+  borderRadius: 24,
   padding: 18,
 };
 
@@ -1168,9 +1347,9 @@ const heroPanelStyle = {
 };
 
 const collectorCardStyle = {
-  background: "linear-gradient(135deg, rgba(17,33,59,0.96), rgba(27,58,138,0.96))",
+  background: "linear-gradient(135deg, rgba(36,26,54,0.98), rgba(76,29,149,0.96))",
   color: "#fff",
-  borderRadius: 16,
+  borderRadius: 24,
   padding: 18,
   minHeight: 120,
   display: "flex",
@@ -1186,16 +1365,16 @@ const integrationGridStyle = {
 };
 
 const integrationPanelStyle = {
-  borderRadius: 16,
+  borderRadius: 24,
   border: `1px solid ${colors.border}`,
-  background: "#0b1326",
+  background: colors.panelAlt,
   padding: 20,
 };
 
 const codePanelStyle = {
-  borderRadius: 16,
+  borderRadius: 24,
   padding: 20,
-  background: "linear-gradient(180deg, #14233e, #0c1630)",
+  background: "linear-gradient(180deg, #19131f, #121215)",
   color: "#edf4ff",
   border: "1px solid rgba(255,255,255,0.08)",
 };
@@ -1219,6 +1398,69 @@ const tokenStyle = {
   wordBreak: "break-all",
 };
 
+const menuPanelStyle = {
+  position: "absolute",
+  top: "calc(100% + 10px)",
+  right: 0,
+  width: 300,
+  borderRadius: 24,
+  border: `1px solid ${colors.border}`,
+  background: "rgba(19,19,20,0.98)",
+  boxShadow: "0 24px 60px rgba(0,0,0,0.45)",
+  overflow: "hidden",
+  zIndex: 30,
+  backdropFilter: "blur(18px)",
+};
+
+const menuPanelHeaderStyle = {
+  padding: "14px 14px 10px",
+  color: colors.gold,
+  fontSize: 11,
+  fontWeight: 800,
+  letterSpacing: 1.1,
+  textTransform: "uppercase",
+};
+
+const menuItemStyle = {
+  padding: "12px 14px",
+  borderTop: `1px solid ${colors.border}`,
+  background: "rgba(255,255,255,0.015)",
+};
+
+const menuEmptyStyle = {
+  padding: "18px 14px 20px",
+  color: colors.muted,
+  fontSize: 13,
+  borderTop: `1px solid ${colors.border}`,
+};
+
+const menuActionButtonStyle = {
+  width: "calc(100% - 28px)",
+  margin: "0 14px 14px",
+  padding: "11px 14px",
+  borderRadius: 14,
+  border: `1px solid ${colors.border}`,
+  background: colors.panelAlt,
+  color: colors.text,
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
+const profileButtonStyle = {
+  width: 40,
+  height: 40,
+  borderRadius: 999,
+  border: `1px solid rgba(198, 163, 111, 0.28)`,
+  background: "linear-gradient(135deg, rgba(198,163,111,0.22), rgba(104,81,48,0.3))",
+  color: colors.text,
+  fontWeight: 800,
+  fontSize: 14,
+  cursor: "pointer",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+};
+
 const tableWrapStyle = {
   display: "flex",
   flexDirection: "column",
@@ -1230,8 +1472,8 @@ const tableRowStyle = {
   gap: 12,
   alignItems: "flex-start",
   padding: 14,
-  borderRadius: 14,
-  background: "#0b1326",
+  borderRadius: 20,
+  background: colors.panelAlt,
   border: `1px solid ${colors.border}`,
 };
 
@@ -1244,16 +1486,16 @@ const incidentLayoutStyle = {
 
 const detailHeroStyle = {
   padding: 20,
-  borderRadius: 16,
-  background: "linear-gradient(135deg, rgba(11,19,38,0.98), rgba(17,26,46,0.98))",
+  borderRadius: 24,
+  background: "linear-gradient(135deg, rgba(19,19,20,0.98), rgba(26,26,27,0.98))",
   border: `1px solid ${colors.border}`,
 };
 
 const traceCardStyle = {
-  borderRadius: 14,
+  borderRadius: 20,
   border: `1px solid ${colors.border}`,
   padding: 14,
-  background: "#0b1326",
+  background: colors.panelAlt,
 };
 
 const metaGridStyle = {
