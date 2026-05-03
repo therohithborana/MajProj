@@ -87,6 +87,8 @@ def _persist_incident(website_id: str, state: dict):
         "action_result": state.get("action_result"),
         "incident_report": state.get("incident_report"),
         "agent_trace": state.get("agent_trace", []),
+        "agent_messages": state.get("agent_messages", []),
+        "llm_usage": state.get("llm_usage", {}),
         "created_at": now,
         "updated_at": now,
     }
@@ -217,6 +219,8 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
         "action_result": None,
         "incident_report": None,
         "agent_trace": [],
+        "agent_messages": [],
+        "llm_usage": {},
         "current_stage": "collector_ingested",
     }
 
@@ -270,6 +274,8 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
                 "incident_report": final_state.get("incident_report"),
                 "policy_decision": final_state.get("policy_decision"),
                 "agent_trace": final_state.get("agent_trace"),
+                "agent_messages": final_state.get("agent_messages"),
+                "llm_usage": final_state.get("llm_usage"),
                 "message": "Autonomous response completed and the incident report is ready.",
             },
         )
@@ -304,6 +310,8 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
                 "incident_report": final_state.get("incident_report"),
                 "policy_decision": final_state.get("policy_decision"),
                 "agent_trace": final_state.get("agent_trace"),
+                "agent_messages": final_state.get("agent_messages"),
+                "llm_usage": final_state.get("llm_usage"),
                 "message": "Incident was escalated for manual follow-up with a completed AI report.",
             },
         )
@@ -456,6 +464,8 @@ async def approve_incident(incident_id: str, body: ApprovalRequest, user=Depends
         "action_result": incident.get("action_result"),
         "incident_report": incident.get("incident_report"),
         "agent_trace": incident.get("agent_trace", []),
+        "agent_messages": incident.get("agent_messages", []),
+        "llm_usage": incident.get("llm_usage", {}),
         "current_stage": incident.get("current_stage"),
     }
     active_incidents[incident_id] = state
@@ -488,6 +498,8 @@ async def approve_incident(incident_id: str, body: ApprovalRequest, user=Depends
             "incident_report": final_state.get("incident_report"),
             "policy_decision": final_state.get("policy_decision"),
             "agent_trace": final_state.get("agent_trace"),
+            "agent_messages": final_state.get("agent_messages"),
+            "llm_usage": final_state.get("llm_usage"),
             "message": "Reporting Agent generated the incident report.",
         },
     )

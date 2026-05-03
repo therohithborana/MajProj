@@ -69,8 +69,8 @@ function getConfig() {
 
 function persistConfig() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(getConfig()));
-  setStatus("Collector configuration saved locally.");
-  addLogEntry("Configuration updated", "NovaCart saved the API base, collector token, and source label.");
+  setStatus("Store connection settings saved locally.");
+  addLogEntry("Settings updated", "NovaCart saved the operations endpoint, connection key, and environment label.");
 }
 
 function loadConfig() {
@@ -83,9 +83,9 @@ function loadConfig() {
     apiBaseInput.value = config.apiBase || apiBaseInput.value;
     collectorTokenInput.value = config.collectorToken || "";
     sourceLabelInput.value = config.sourceLabel || sourceLabelInput.value;
-    setStatus(config.collectorToken ? "Collector token loaded. Ready to send telemetry." : "Paste your collector token to begin.");
+    setStatus(config.collectorToken ? "Store connection loaded. Activity sync is ready." : "Paste your store connection key to begin.");
   } catch (_error) {
-    setStatus("Could not load saved collector configuration.");
+    setStatus("Could not load saved store settings.");
   }
 }
 
@@ -109,8 +109,8 @@ function addLogEntry(title, message) {
 function ensureConfigured() {
   const config = getConfig();
   if (!config.apiBase || !config.collectorToken) {
-    setStatus("Missing API base or collector token.", "error");
-    addLogEntry("Collector blocked", "Paste the collector token from the CyberAgent dashboard before sending telemetry.");
+    setStatus("Missing API base or store connection key.", "error");
+    addLogEntry("Connection blocked", "Paste the project token from the dashboard before syncing store activity.");
     return null;
   }
   return config;
@@ -122,7 +122,7 @@ async function sendScenario(title, payloadDescription, payload) {
     return;
   }
 
-  setStatus("Sending telemetry to CyberAgent...", "warn");
+  setStatus("Syncing store activity...", "warn");
   try {
     const response = await fetch(`${config.apiBase}/collector/ingest`, {
       method: "POST",
@@ -142,11 +142,11 @@ async function sendScenario(title, payloadDescription, payload) {
     }
 
     const suffix = data.attack_id ? ` Incident id: ${data.attack_id}.` : "";
-    setStatus(`Telemetry accepted by CyberAgent.${suffix}`, "success");
-    addLogEntry(title, `${payloadDescription} ${data.events_ingested} event(s) were accepted by CyberAgent.${suffix}`);
+    setStatus(`Store activity synced successfully.${suffix}`, "success");
+    addLogEntry(title, `${payloadDescription} ${data.events_ingested} activity event(s) were synced successfully.${suffix}`);
   } catch (error) {
-    setStatus("Failed to send telemetry to CyberAgent.", "error");
-    addLogEntry(title, `Request failed: ${error.message}`);
+    setStatus("Failed to sync store activity.", "error");
+    addLogEntry(title, `Sync failed: ${error.message}`);
   }
 }
 
@@ -223,13 +223,13 @@ function customerLoginPayload(email) {
 
 document.getElementById("saveConfigBtn").addEventListener("click", persistConfig);
 document.getElementById("sendHealthBtn").addEventListener("click", () =>
-  sendScenario("Healthy traffic", "NovaCart generated healthy browsing telemetry.", healthyTrafficPayload())
+  sendScenario("Store sync", "NovaCart synced recent browsing and checkout activity.", healthyTrafficPayload())
 );
 document.getElementById("browseBtn").addEventListener("click", () =>
-  sendScenario("Product browse", "A normal customer session viewed products and storefront pages.", healthyTrafficPayload())
+  sendScenario("Best-seller browse", "A customer explored best sellers and storefront pages.", healthyTrafficPayload())
 );
 document.getElementById("checkoutBtn").addEventListener("click", () =>
-  sendScenario("Checkout flow", "A normal checkout flow was collected and forwarded.", {
+  sendScenario("Cart review", "A shopper reviewed their cart and began checkout.", {
     run_detection: false,
     events: [
       accessEvent("198.51.100.24", "/products"),
@@ -242,44 +242,44 @@ document.getElementById("checkoutBtn").addEventListener("click", () =>
 
 document.querySelectorAll("[data-scenario='browse']").forEach((button) => {
   button.addEventListener("click", () =>
-    sendScenario("Product page visit", "A customer opened a product page on NovaCart.", healthyTrafficPayload())
+    sendScenario("Collection browse", "A shopper opened a featured product page on NovaCart.", healthyTrafficPayload())
   );
 });
 
 document.querySelector("[data-scenario='healthy']").addEventListener("click", () =>
-  sendScenario("Healthy traffic", "NovaCart generated healthy browsing telemetry.", healthyTrafficPayload())
+  sendScenario("Collection browse", "NovaCart synced normal browsing activity from a featured collection.", healthyTrafficPayload())
 );
 document.querySelector("[data-scenario='bruteforce']").addEventListener("click", () =>
-  sendScenario("Brute force simulation", "NovaCart observed repeated failed administrator logins.", bruteForcePayload())
+  sendScenario("Merchant sign-in issue", "NovaCart observed repeated failed merchant sign-in attempts.", bruteForcePayload())
 );
 document.querySelector("[data-scenario='recon']").addEventListener("click", () =>
-  sendScenario("Recon simulation", "NovaCart observed sensitive-path reconnaissance traffic.", reconPayload())
+  sendScenario("Suspicious storefront probing", "NovaCart observed unusual requests against restricted store paths.", reconPayload())
 );
 document.querySelector("[data-scenario='traffic']").addEventListener("click", () =>
-  sendScenario("Traffic spike simulation", "NovaCart observed a sudden traffic spike and SYN-heavy network burst.", trafficPayload())
+  sendScenario("Flash-sale traffic surge", "NovaCart observed a sudden spike in storefront traffic and service load.", trafficPayload())
 );
 
 document.getElementById("customerLoginForm").addEventListener("submit", (event) => {
   event.preventDefault();
   const email = document.getElementById("customerEmail").value.trim();
-  sendScenario("Customer login", "A normal customer login was collected by the site-side agent.", customerLoginPayload(email));
+  sendScenario("Customer sign-in", "A customer signed in to view saved orders and addresses.", customerLoginPayload(email));
 });
 
 document.getElementById("adminLoginForm").addEventListener("submit", (event) => {
   event.preventDefault();
   const adminUser = document.getElementById("adminUser").value.trim() || "admin";
   sendScenario(
-    "Admin login attempt",
-    `The admin portal generated suspicious login telemetry for user ${adminUser}.`,
+    "Merchant login",
+    `The merchant portal generated sign-in activity for user ${adminUser}.`,
     bruteForcePayload()
   );
 });
 
 document.getElementById("clearLogBtn").addEventListener("click", () => {
-  activityLog.innerHTML = '<div class="activity-empty">No site-side collector events sent yet.</div>';
+  activityLog.innerHTML = '<div class="activity-empty">No store activity has been synced yet.</div>';
 });
 
 loadConfig();
 if (!activityLog.children.length) {
-  activityLog.innerHTML = '<div class="activity-empty">No site-side collector events sent yet.</div>';
+  activityLog.innerHTML = '<div class="activity-empty">No store activity has been synced yet.</div>';
 }

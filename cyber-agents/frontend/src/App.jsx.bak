@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { LayoutDashboard, ShieldAlert, Activity, Settings, Bell, Search, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 
 const API_BASE = "http://localhost:8000";
 const WS_URL = "ws://localhost:8000/ws";
@@ -246,8 +245,6 @@ function App() {
 
   const [authForm, setAuthForm] = useState({ name: "", email: "", password: "" });
   const [websiteForm, setWebsiteForm] = useState({ name: "", domain: "", environment: "production" });
-  const [currentTab, setCurrentTab] = useState("dashboard");
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   useEffect(() => {
     if (!token) {
@@ -675,291 +672,380 @@ function App() {
   }
 
   return (
-    <div className="dashboard-layout">
-      <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
-        <div className="sidebar-header">
-          <ShieldAlert className="sidebar-logo" size={28} />
-          {!sidebarCollapsed && <div className="sidebar-title">CyberAgent SOC</div>}
-        </div>
-        <div className="sidebar-nav">
-          <button className={`nav-item ${currentTab === 'dashboard' ? 'active' : ''}`} onClick={() => setCurrentTab('dashboard')}>
-            <LayoutDashboard className="nav-item-icon" size={20} />
-            {!sidebarCollapsed && <span>Dashboard</span>}
-          </button>
-          <button className={`nav-item ${currentTab === 'telemetry' ? 'active' : ''}`} onClick={() => setCurrentTab('telemetry')}>
-            <Activity className="nav-item-icon" size={20} />
-            {!sidebarCollapsed && <span>Telemetry & Lab</span>}
-          </button>
-          <button className={`nav-item ${currentTab === 'incidents' ? 'active' : ''}`} onClick={() => setCurrentTab('incidents')}>
-            <ShieldAlert className="nav-item-icon" size={20} />
-            {!sidebarCollapsed && <span>Threat Detection</span>}
-          </button>
-        </div>
-        <div className="sidebar-footer">
-          <button className="nav-item" onClick={logout}>
-            <Settings className="nav-item-icon" size={20} />
-            {!sidebarCollapsed && <span>Settings & Logout</span>}
-          </button>
-        </div>
-      </aside>
-
-      <main className="main-content">
-        <div className="topbar">
-          <div className="flex-gap">
-            <button className="btn btn-secondary" style={{padding: '8px', border: 'none'}} onClick={() => setSidebarCollapsed(!sidebarCollapsed)}>
-              {sidebarCollapsed ? <PanelLeftOpen size={20} /> : <PanelLeftClose size={20} />}
-            </button>
-            <div className="topbar-search">
-              <Search size={18} color="var(--text-subtle)" />
-              <input type="text" placeholder="Search incidents, IPs, policies..." />
-            </div>
-          </div>
-          <div className="flex-gap">
-            <StatusPill color={connected ? "var(--color-green)" : "var(--color-red)"}>
-              {connected ? "Realtime Active" : "Disconnected"}
-            </StatusPill>
-            <button className="btn" style={{background: 'transparent', border: 'none', color: 'var(--text-muted)'}}>
-              <Bell size={20} />
-            </button>
-            <div style={{width: 36, height: 36, borderRadius: '50%', background: 'var(--color-blue)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', color: '#fff'}}>
-              {user?.name?.charAt(0) || 'A'}
-            </div>
+    <div style={pageStyle}>
+      <div style={topBarStyle}>
+        <div>
+          <div style={eyebrowStyle}>CyberAgent Command</div>
+          <div style={{ fontSize: 32, fontWeight: 800 }}>Autonomous AI SOC</div>
+          <div style={{ color: colors.muted, marginTop: 6 }}>
+            AI agents handle ingestion, triage, investigation, policy, and response while humans stay in the loop for risky actions.
           </div>
         </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <StatusPill color={connected ? colors.green : colors.red}>
+            {connected ? "Realtime connected" : "Live stream disconnected"}
+          </StatusPill>
+          <button onClick={logout} style={secondaryButtonStyle}>
+            Log out
+          </button>
+        </div>
+      </div>
 
-        <div className="content-scrollable">
-          {error ? <div style={errorStyle}>{error}</div> : null}
+      {error ? <div style={errorStyle}>{error}</div> : null}
+
+      <div style={dashboardLayoutStyle}>
+        <aside style={sidebarStyle}>
+          <Section title="Protected projects" eyebrow="Multi-tenant workspaces">
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {websites.map((website) => (
+                <button
+                  key={website._id}
+                  onClick={() => setSelectedWebsiteId(website._id)}
+                  style={{
+                    ...projectCardStyle,
+                    background: selectedWebsiteId === website._id ? colors.panelAlt : colors.panel,
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
+                    <div style={{ fontWeight: 700 }}>{website.name}</div>
+                    <StatusPill color={website.status === "connected" ? colors.green : colors.amber}>{website.status}</StatusPill>
+                  </div>
+                  <div style={{ color: colors.muted, fontSize: 13 }}>{website.domain}</div>
+                  <div style={{ color: colors.subtle, fontSize: 12, marginTop: 6 }}>{website.environment}</div>
+                </button>
+              ))}
+            </div>
+          </Section>
+
+          <Section title="Agent activity" eyebrow="Live orchestration feed">
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, maxHeight: 420, overflowY: "auto" }}>
+              {feed
+                .filter((entry) => !selectedWebsiteId || entry.data.website_id === selectedWebsiteId)
+                .map((entry) => (
+                  <div key={entry.id} style={feedCardStyle}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 6 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700 }}>{entry.data.agent_trace_entry?.agent || entry.type}</div>
+                      <div style={{ fontSize: 11, color: colors.subtle }}>{new Date(entry.timestamp).toLocaleTimeString()}</div>
+                    </div>
+                    <div style={{ color: colors.muted, fontSize: 12, lineHeight: 1.5 }}>
+                      {entry.data.message || entry.data.current_stage || "Event received"}
+                    </div>
+                  </div>
+                ))}
+            </div>
+          </Section>
+        </aside>
+
+        <main style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 20 }}>
           {selectedWebsite ? (
             <>
-              {currentTab === 'dashboard' && (
-                <div>
-                  <div className="flex-between" style={{marginBottom: 24}}>
+              <Section
+                title={selectedWebsite.name}
+                eyebrow="Protected application"
+                right={
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <button onClick={simulateAttack} style={primaryButtonStyle}>
+                      Simulate attack
+                    </button>
+                    <button onClick={toggleAuto} style={secondaryButtonStyle}>
+                      {autoRunning ? "Stop auto monitor" : "Start auto monitor"}
+                    </button>
+                  </div>
+                }
+              >
+                <div style={heroPanelStyle}>
+                  <div style={metaGridStyle}>
+                    <Field label="Domain" value={selectedWebsite.domain} />
+                    <Field label="Environment" value={selectedWebsite.environment} />
+                    <Field label="Collector mode" value={selectedWebsite.collector?.mode || "agent"} />
+                    <Field label="Project status" value={selectedWebsite.status} accent={colors.green} />
+                  </div>
+                  <div style={collectorCardStyle}>
                     <div>
-                      <div className="card-title" style={{fontSize: 24}}>{selectedWebsite.name}</div>
-                      <div style={{color: 'var(--text-muted)'}}>{selectedWebsite.domain} • {selectedWebsite.environment}</div>
+                      <div style={eyebrowStyle}>Collector token</div>
+                      <div style={tokenStyle}>{selectedWebsite.collector?.ingest_token || "Unavailable"}</div>
                     </div>
-                    <div className="flex-gap">
-                      <button onClick={simulateAttack} className="btn btn-primary">Simulate Attack</button>
-                      <button onClick={toggleAuto} className={`btn ${autoRunning ? 'btn-danger' : 'btn-secondary'}`}>
-                        {autoRunning ? "Stop Monitor" : "Start Monitor"}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="grid-metrics">
-                    <div className="card">
-                      <div className="card-header">
-                        <div className="card-title">Total Events</div>
-                        <Activity size={20} color="var(--color-blue)" />
-                      </div>
-                      <div className="card-value">{telemetry.total_events || 0}</div>
-                      <div style={{color: 'var(--text-subtle)', fontSize: 13}}>Collector-fed data</div>
-                    </div>
-                    <div className="card">
-                      <div className="card-header">
-                        <div className="card-title">Incidents</div>
-                        <ShieldAlert size={20} color="var(--color-amber)" />
-                      </div>
-                      <div className="card-value">{stats.incidents}</div>
-                      <div style={{color: 'var(--text-subtle)', fontSize: 13}}>Detected across project</div>
-                    </div>
-                    <div className="card">
-                      <div className="card-header">
-                        <div className="card-title">Auto-executed</div>
-                        <Settings size={20} color="var(--color-green)" />
-                      </div>
-                      <div className="card-value">{stats.autoExecuted}</div>
-                      <div style={{color: 'var(--text-subtle)', fontSize: 13}}>Resolved autonomously</div>
-                    </div>
-                    <div className="card">
-                      <div className="card-header">
-                        <div className="card-title">Pending Approvals</div>
-                        <Bell size={20} color="var(--color-red)" />
-                      </div>
-                      <div className="card-value">{stats.approvals}</div>
-                      <div style={{color: 'var(--text-subtle)', fontSize: 13}}>Queued for decision</div>
-                    </div>
-                  </div>
-
-                  <div className="grid-layout">
-                    <div className="card">
-                      <div className="card-title" style={{marginBottom: 16}}>Live Orchestration Feed</div>
-                      <div style={{display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 400, overflowY: 'auto'}}>
-                        {feed.filter(e => !selectedWebsiteId || e.data.website_id === selectedWebsiteId).map(entry => (
-                          <div key={entry.id} style={{padding: 12, background: 'rgba(255,255,255,0.03)', borderRadius: 8, borderLeft: `3px solid var(--color-blue)`}}>
-                            <div className="flex-between" style={{marginBottom: 6}}>
-                              <span style={{fontSize: 13, fontWeight: 600}}>{entry.data.agent_trace_entry?.agent || entry.type}</span>
-                              <span style={{fontSize: 11, color: 'var(--text-subtle)'}}>{new Date(entry.timestamp).toLocaleTimeString()}</span>
-                            </div>
-                            <div style={{fontSize: 13, color: 'var(--text-muted)'}}>{entry.data.message || entry.data.current_stage || "Event"}</div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="card">
-                      <div className="card-title" style={{marginBottom: 16}}>Projects</div>
-                      <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
-                        {websites.map(w => (
-                          <div key={w._id} className={`table-row-clickable ${selectedWebsiteId === w._id ? 'active' : ''}`} onClick={() => setSelectedWebsiteId(w._id)} style={{padding: 12, border: '1px solid var(--border-color)', borderRadius: 8, background: selectedWebsiteId === w._id ? 'var(--panel-alt)' : 'transparent'}}>
-                            <div className="flex-between" style={{marginBottom: 4}}>
-                              <span style={{fontWeight: 600}}>{w.name}</span>
-                              <StatusPill color={w.status === 'connected' ? 'var(--color-green)' : 'var(--color-amber)'}>{w.status}</StatusPill>
-                            </div>
-                            <div style={{fontSize: 12, color: 'var(--text-subtle)'}}>{w.domain}</div>
-                          </div>
-                        ))}
-                      </div>
+                    <div style={{ color: colors.muted, lineHeight: 1.6, fontSize: 14 }}>
+                      Customer-side collector posts batched events to `POST /collector/ingest` with `X-Collector-Token`.
                     </div>
                   </div>
                 </div>
-              )}
+              </Section>
 
-              {currentTab === 'telemetry' && (
-                <div>
-                  <div className="card" style={{marginBottom: 24}}>
-                    <div className="card-title" style={{marginBottom: 16}}>Collector Setup</div>
-                    <div className="grid-layout">
-                      <div>
-                        <div style={{marginBottom: 16, color: 'var(--text-muted)'}}>
-                          Customer-side collector posts batched events to <code>POST /collector/ingest</code> with <code>X-Collector-Token</code>.
-                        </div>
-                        <div style={{background: 'var(--bg-canvas)', padding: 16, borderRadius: 8, border: '1px solid var(--border-color)', marginBottom: 16}}>
-                          <div style={{fontSize: 12, color: 'var(--color-gold)', marginBottom: 8, fontWeight: 'bold'}}>COLLECTOR TOKEN</div>
-                          <div style={tokenStyle}>{selectedWebsite.collector?.ingest_token || "Unavailable"}</div>
+              <Section title="Integration lab" eyebrow="Collector setup and customer onboarding">
+                <div style={integrationGridStyle}>
+                  <div style={integrationPanelStyle}>
+                    <div style={eyebrowStyle}>How it connects</div>
+                    <div style={{ fontSize: 24, fontWeight: 800, marginBottom: 10 }}>
+                      {selectedWebsite.demo_site?.name || "NovaCart"} sends telemetry with the collector token.
+                    </div>
+                    <div style={{ color: colors.muted, lineHeight: 1.7, marginBottom: 16 }}>
+                      In a real deployment, a small collector runs beside the customer website, reads app, auth, and
+                      network events, and posts them to your backend with the project token in the header.
+                    </div>
+                    <div style={tableWrapStyle}>
+                      <div style={tableRowStyle}>
+                        <div style={{ fontWeight: 700, minWidth: 130 }}>Step 1</div>
+                        <div style={{ color: colors.muted }}>Create the protected project and copy its collector token.</div>
+                      </div>
+                      <div style={tableRowStyle}>
+                        <div style={{ fontWeight: 700, minWidth: 130 }}>Step 2</div>
+                        <div style={{ color: colors.muted }}>
+                          Paste the token into the customer-side collector as `CYBERAGENT_COLLECTOR_TOKEN`.
                         </div>
                       </div>
-                      <div style={codePanelStyle}>
-                        <div style={eyebrowStyle}>Collector Request Example</div>
-                        <pre style={codeBlockStyle}>{`POST ${integration?.ingest_url || API_BASE + '/collector/ingest'}
+                      <div style={tableRowStyle}>
+                        <div style={{ fontWeight: 700, minWidth: 130 }}>Step 3</div>
+                        <div style={{ color: colors.muted }}>
+                          The collector sends batched events to `/collector/ingest` using `X-Collector-Token`.
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={codePanelStyle}>
+                    <div style={eyebrowStyle}>Collector request</div>
+                    <pre style={codeBlockStyle}>
+{`POST ${integration?.ingest_url || `${API_BASE}/collector/ingest`}
 Header: ${integration?.token_header || "X-Collector-Token"}: ${selectedWebsite.collector?.ingest_token || ""}
 Body: {
   "source_label": "${selectedWebsite.name} web collector",
   "run_detection": true,
   "events": [...]
-}`}</pre>
-                      </div>
+}`}
+                    </pre>
+                    <div style={{ color: colors.subtle, fontSize: 13, lineHeight: 1.6 }}>
+                      Sample collector file: `backend/collector_agent.py`
                     </div>
                   </div>
-                  
-                  <div className="card">
-                    <div className="card-title" style={{marginBottom: 16}}>Normalized Event Streams</div>
-                    <table className="data-table">
-                      <thead>
-                        <tr>
-                          <th>Event Type</th>
-                          <th>Message Details</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(telemetry.recent_events || []).slice(0, 10).map((event, i) => (
-                          <tr key={i}>
-                            <td style={{fontWeight: 600, textTransform: 'capitalize'}}>{event.event_type}</td>
-                            <td>{event.message}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
                 </div>
-              )}
+              </Section>
 
-              {currentTab === 'incidents' && (
-                <div className="grid-layout">
-                  <div className="card" style={{padding: '16px 0'}}>
-                    <div className="card-title" style={{padding: '0 16px', marginBottom: 12}}>Incident Queue</div>
-                    <div style={{display: 'flex', flexDirection: 'column'}}>
-                      {websiteIncidents.length ? websiteIncidents.map(incident => {
+              <div style={statsGridStyle}>
+                <StatCard label="Total telemetry events" value={telemetry.total_events || 0} hint="Collector-fed access, auth, and network data" />
+                <StatCard label="Incidents" value={stats.incidents} hint="Detected across this protected project" />
+                <StatCard label="Auto-executed" value={stats.autoExecuted} hint="Resolved autonomously by policy" />
+                <StatCard label="Approval-gated" value={stats.approvals} hint="Queued for human decision" />
+              </div>
+
+              <Section title="Telemetry overview" eyebrow="Normalized event streams">
+                <div style={statsGridStyle}>
+                  <StatCard label="Access events" value={telemetry.counts?.access || 0} hint="Application requests" />
+                  <StatCard label="Auth events" value={telemetry.counts?.auth || 0} hint="Identity and login activity" />
+                  <StatCard label="Network events" value={telemetry.counts?.network || 0} hint="Connection and flow telemetry" />
+                </div>
+                <div style={tableWrapStyle}>
+                  {(telemetry.recent_events || []).slice(0, 8).map((event, index) => (
+                    <div key={`${event.attack_id || "event"}-${index}`} style={tableRowStyle}>
+                      <div style={{ fontWeight: 700, minWidth: 90 }}>{event.event_type}</div>
+                      <div style={{ color: colors.muted, flex: 1 }}>{event.message}</div>
+                    </div>
+                  ))}
+                </div>
+              </Section>
+
+              <Section title="Incident queue" eyebrow="AI-driven detections">
+                <div style={incidentLayoutStyle}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    {websiteIncidents.length ? (
+                      websiteIncidents.map((incident) => {
                         const severity = incident.classification?.attack?.severity || "LOW";
                         const policyMode = incident.policy_decision?.mode || "approval_required";
                         return (
-                          <div key={incident.attack_id} className={`table-row-clickable ${selectedIncidentId === incident.attack_id ? 'active' : ''}`} onClick={() => setSelectedIncidentId(incident.attack_id)} style={{padding: '16px', borderBottom: '1px solid var(--border-color)', background: selectedIncidentId === incident.attack_id ? 'var(--panel-alt)' : 'transparent'}}>
-                            <div className="flex-between" style={{marginBottom: 8}}>
-                              <span style={{fontWeight: 600}}>{incident.classification?.predicted_class || incident.attack_id}</span>
-                              <span className={`status-pill badge-${severity === 'CRITICAL' ? 'red' : severity === 'HIGH' ? 'amber' : 'amber'}`}>{severity}</span>
+                          <button
+                            key={incident.attack_id}
+                            onClick={() => setSelectedIncidentId(incident.attack_id)}
+                            style={{
+                              ...projectCardStyle,
+                              background: selectedIncident?.attack_id === incident.attack_id ? colors.panelAlt : colors.panel,
+                            }}
+                          >
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 10 }}>
+                              <div style={{ fontWeight: 700 }}>{incident.classification?.predicted_class || incident.attack_id}</div>
+                              <StatusPill color={severityColors[severity] || colors.amber}>{severity}</StatusPill>
                             </div>
-                            <div style={{fontSize: 13, color: 'var(--text-muted)', marginBottom: 12}}>
+                            <div style={{ color: colors.muted, fontSize: 13, marginBottom: 8 }}>
                               {incident.simulation?.description || "Investigation in progress"}
                             </div>
-                            <div className="flex-gap">
-                              <span className="status-pill badge-blue">{policyMode.replace('_', ' ')}</span>
+                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                              <StatusPill color={policyColors[policyMode] || colors.blue}>{policyMode.replaceAll("_", " ")}</StatusPill>
+                              {incident.action_result?.execution_mode ? (
+                                <StatusPill color={colors.blue}>{incident.action_result.execution_mode.replaceAll("_", " ")}</StatusPill>
+                              ) : null}
                             </div>
-                          </div>
-                        )
-                      }) : <div style={{padding: 24, textAlign: 'center', color: 'var(--text-muted)'}}>No incidents found.</div>}
-                    </div>
+                          </button>
+                        );
+                      })
+                    ) : (
+                      <EmptyState title="No incidents yet" body="Run the simulator or start auto-monitoring to generate collector-fed threat telemetry." />
+                    )}
                   </div>
-                  
+
                   <div>
                     {selectedIncident ? (
-                      <div className="card">
-                        <div className="flex-between" style={{marginBottom: 16}}>
-                          <div>
-                            <div style={{fontSize: 12, color: 'var(--color-gold)', fontWeight: 600, marginBottom: 4}}>INCIDENT DETAILS</div>
-                            <div className="card-title" style={{fontSize: 20}}>{selectedIncident.classification?.predicted_class || selectedIncident.attack_id}</div>
-                          </div>
-                        </div>
-                        <div style={{color: 'var(--text-muted)', fontSize: 14, lineHeight: 1.6, marginBottom: 24}}>
-                          {selectedIncident.anomaly?.summary || selectedIncident.simulation?.description}
-                        </div>
-                        
-                        <div className="grid-metrics" style={{gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24}}>
-                          <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
-                            <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>PRIMARY SOURCE</div>
-                            <div style={{fontWeight: 600, fontSize: 13}}>{selectedIncident.classification?.attack?.primary_src_ip || '—'}</div>
-                          </div>
-                          <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
-                            <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>TARGET</div>
-                            <div style={{fontWeight: 600, fontSize: 13}}>{selectedIncident.classification?.attack ? `${selectedIncident.classification.attack.target_ip}:${selectedIncident.classification.attack.target_port}` : '—'}</div>
-                          </div>
-                          <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
-                            <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>CONFIDENCE</div>
-                            <div style={{fontWeight: 600, fontSize: 13}}>{selectedIncident.classification?.confidence ? `${Math.round(selectedIncident.classification.confidence * 100)}%` : '—'}</div>
-                          </div>
-                          <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
-                            <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>RISK SCORE</div>
-                            <div style={{fontWeight: 600, fontSize: 13}}>{selectedIncident.classification?.risk_score || '—'}</div>
-                          </div>
-                        </div>
-
-                        {selectedIncident.approval_status === "pending" && (
-                          <div style={{padding: 16, background: 'rgba(212, 167, 44, 0.1)', border: '1px solid rgba(212, 167, 44, 0.3)', borderRadius: 12, marginBottom: 24}}>
-                            <div style={{fontWeight: 600, marginBottom: 12, color: 'var(--color-amber)'}}>Human Approval Required</div>
-                            <div className="flex-gap">
-                              <button className="btn btn-primary" disabled={decisionLoading[selectedIncident.attack_id]} onClick={() => decideIncident("approved")}>Approve Containment</button>
-                              <button className="btn btn-danger" disabled={decisionLoading[selectedIncident.attack_id]} onClick={() => decideIncident("rejected")}>Reject to Manual</button>
-                            </div>
-                          </div>
-                        )}
-
-                        <div className="card-title" style={{marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>AGENT TRACE</div>
-                        <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
-                          {(selectedIncident.agent_trace || []).map((entry, idx) => (
-                            <div key={idx} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
-                              <div className="flex-between" style={{marginBottom: 6}}>
-                                <span style={{fontWeight: 600, fontSize: 13}}>{entry.agent}</span>
-                                <span style={{fontSize: 12, color: 'var(--text-subtle)'}}>{entry.stage}</span>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                        <div style={detailHeroStyle}>
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                            <div>
+                              <div style={eyebrowStyle}>Incident</div>
+                              <div style={{ fontSize: 28, fontWeight: 800 }}>
+                                {selectedIncident.classification?.predicted_class || selectedIncident.attack_id}
                               </div>
-                              <div style={{fontSize: 13, color: 'var(--text-muted)'}}>{entry.summary}</div>
                             </div>
-                          ))}
+                            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                              <StatusPill
+                                color={severityColors[selectedIncident.classification?.attack?.severity || "MEDIUM"] || colors.amber}
+                              >
+                                {selectedIncident.classification?.attack?.severity || "MEDIUM"}
+                              </StatusPill>
+                              <StatusPill
+                                color={policyColors[selectedIncident.policy_decision?.mode || "approval_required"] || colors.blue}
+                              >
+                                {(selectedIncident.policy_decision?.mode || "approval_required").replaceAll("_", " ")}
+                              </StatusPill>
+                            </div>
+                          </div>
+                          <div style={{ color: colors.muted, lineHeight: 1.6, marginTop: 12 }}>
+                            {selectedIncident.anomaly?.summary || selectedIncident.simulation?.description}
+                          </div>
                         </div>
+
+                        <div style={metaGridStyle}>
+                          <Field label="Primary source" value={selectedIncident.classification?.attack?.primary_src_ip} />
+                          <Field
+                            label="Target"
+                            value={
+                              selectedIncident.classification?.attack
+                                ? `${selectedIncident.classification.attack.target_ip}:${selectedIncident.classification.attack.target_port}`
+                                : "—"
+                            }
+                          />
+                          <Field
+                            label="Confidence"
+                            value={
+                              selectedIncident.classification?.confidence
+                                ? `${Math.round(selectedIncident.classification.confidence * 100)}%`
+                                : "—"
+                            }
+                          />
+                          <Field label="Confidence source" value={selectedIncident.classification?.confidence_source} />
+                          <Field label="Risk score" value={selectedIncident.classification?.risk_score} />
+                        </div>
+
+                        <Section title="Automation decision" eyebrow="Policy agent">
+                          <div style={tableWrapStyle}>
+                            <Field label="Policy mode" value={selectedIncident.policy_decision?.mode?.replaceAll("_", " ")} />
+                            <Field label="Reason" value={selectedIncident.policy_decision?.reason} />
+                            <Field
+                              label="Execution status"
+                              value={selectedIncident.action_result?.execution_mode?.replaceAll("_", " ") || "Awaiting action"}
+                            />
+                          </div>
+                          {selectedIncident.approval_status === "pending" ? (
+                            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 16 }}>
+                              <button
+                                onClick={() => decideIncident("approved")}
+                                style={primaryButtonStyle}
+                                disabled={decisionLoading[selectedIncident.attack_id]}
+                              >
+                                {decisionLoading[selectedIncident.attack_id] ? "Applying..." : "Approve containment"}
+                              </button>
+                              <button
+                                onClick={() => decideIncident("rejected")}
+                                style={dangerButtonStyle}
+                                disabled={decisionLoading[selectedIncident.attack_id]}
+                              >
+                                Reject to manual queue
+                              </button>
+                            </div>
+                          ) : null}
+                        </Section>
+
+                        <Section title="Agent trace" eyebrow="Explainable orchestration">
+                          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                            {(selectedIncident.agent_trace || []).map((entry, index) => (
+                              <div key={`${entry.agent}-${index}`} style={traceCardStyle}>
+                                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 6 }}>
+                                  <div style={{ fontWeight: 700 }}>{entry.agent}</div>
+                                  <div style={{ color: colors.subtle, fontSize: 12 }}>{entry.stage}</div>
+                                </div>
+                                <div style={{ color: colors.muted, lineHeight: 1.5 }}>{entry.summary}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </Section>
+
+                        <Section title="Agent handoffs" eyebrow="Inter-agent communication">
+                          {(selectedIncident.agent_messages || []).length ? (
+                            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                              {(selectedIncident.agent_messages || []).map((message, index) => (
+                                <div key={`${message.subject}-${index}`} style={traceCardStyle}>
+                                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 6 }}>
+                                    <div style={{ fontWeight: 700 }}>{message.subject}</div>
+                                    <div style={{ color: colors.subtle, fontSize: 12 }}>
+                                      {message.from} to {message.to}
+                                    </div>
+                                  </div>
+                                  <div style={{ color: colors.muted, lineHeight: 1.5 }}>{message.content}</div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <EmptyState title="No handoffs recorded" body="This incident does not yet contain agent-to-agent communication records." />
+                          )}
+                        </Section>
+
+                        <Section title="Evidence and playbook" eyebrow="Investigation output">
+                          <div style={metaGridStyle}>
+                            <Field
+                              label="Affected assets"
+                              value={(selectedIncident.investigation?.affected_assets || []).join(", ")}
+                            />
+                            <Field
+                              label="Flagged paths"
+                              value={(selectedIncident.anomaly?.flagged_paths || []).join(", ")}
+                            />
+                          </div>
+                          <div style={tableWrapStyle}>
+                            {(selectedIncident.mitigation_plan?.steps || []).map((step) => (
+                              <div key={step.step} style={tableRowStyle}>
+                                <div style={{ fontWeight: 700, minWidth: 88 }}>Step {step.step}</div>
+                                <div style={{ flex: 1 }}>
+                                  <div style={{ fontWeight: 700 }}>{step.action}</div>
+                                  <div style={{ color: colors.muted, fontSize: 13, marginTop: 4 }}>{step.command}</div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </Section>
+
+                        <Section title="Final report" eyebrow="Reporting agent">
+                          {selectedIncident.incident_report ? (
+                            <>
+                              <div style={{ color: colors.muted, lineHeight: 1.7, marginBottom: 16 }}>
+                                {selectedIncident.incident_report.executive_summary}
+                              </div>
+                              <div style={metaGridStyle}>
+                                <Field label="Response" value={selectedIncident.incident_report.response} />
+                                <Field label="Policy mode" value={selectedIncident.incident_report.automation?.policy_mode} />
+                                <Field label="Execution mode" value={selectedIncident.incident_report.automation?.execution_mode} />
+                              </div>
+                            </>
+                          ) : (
+                            <EmptyState title="Report pending" body="The final report appears after the response path completes." />
+                          )}
+                        </Section>
                       </div>
                     ) : (
-                      <div className="card" style={{display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 400, color: 'var(--text-muted)'}}>
-                        Select an incident to view details
-                      </div>
+                      <EmptyState title="Choose an incident" body="Select an incident from the queue to inspect its agent trace, evidence, and automation policy." />
                     )}
                   </div>
                 </div>
-              )}
+              </Section>
             </>
-          ) : (
-            <div style={{padding: 40, textAlign: 'center', color: 'var(--text-muted)'}}>
-              Select a project from the sidebar to view metrics.
-            </div>
-          )}
-        </div>
-      </main>
+          ) : null}
+        </main>
+      </div>
     </div>
   );
 }
