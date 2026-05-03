@@ -2,16 +2,27 @@
 
 CyberAgent is a multi-agent cybersecurity SaaS prototype for startup web applications. A startup creates a protected project, installs a lightweight collector, streams `access`, `auth`, and `network` telemetry, and lets AI/security agents detect, investigate, classify, and respond to threats with a `70% automation / 30% human oversight` model.
 
+The project now includes a `phase-1 protocol migration` toward:
+- `A2A` for agent-to-agent invocation contracts
+- `AG-UI` for frontend-facing event streams
+- a `Google ADK-compatible coordinator runtime` pattern for the root SOC orchestrator
+
+This is intentionally a practical migration step, not a risky full rewrite. The current backend still uses the working CyberAgent logic, but it now exposes named agent services, A2A-style agent cards/invoke endpoints, and AG-UI event streams over the same incident pipeline.
+
 ## What makes this a major-project style build
 - Multi-tenant startup/project onboarding
 - Collector-token based customer integration
 - Normalized telemetry ingestion API
 - Multi-agent orchestration for detection, correlation, classification, investigation, response, policy, action, and reporting
+- A2A-style coordinator and per-agent invoke surface
+- AG-UI compatible incident event streaming
 - Human-in-the-loop approvals for risky actions
-- Dummy customer website integration lab for end-to-end demo
+- Standalone dummy customer website integration lab for end-to-end demo
 
 ## Architecture
 Collector Agent
+        ↓
+SOC Coordinator Agent (ADK-compatible root runtime)
         ↓
 Normalization Agent
         ↓
@@ -30,6 +41,32 @@ Policy Agent
 Action Agent
         ↓
 Reporting Agent
+
+## Protocol surfaces
+
+### A2A
+CyberAgent now exposes:
+- `GET /a2a/agents`
+- `GET /a2a/soc_coordinator/agent-card.json`
+- `GET /a2a/agents/{agent_name}/agent-card.json`
+- `POST /a2a/agents/{agent_name}/invoke`
+- `POST /a2a/soc_coordinator/run`
+
+These endpoints let you inspect the available agents, their contracts, and invoke them through a standardized agent-to-agent style envelope.
+
+### AG-UI
+CyberAgent also exposes:
+- `POST /agui/runs`
+
+This returns an `AG-UI` event stream with:
+- `RUN_STARTED`
+- `STATE_SNAPSHOT`
+- `TOOL_CALL_START / TOOL_CALL_ARGS / TOOL_CALL_END / TOOL_CALL_RESULT`
+- `STATE_DELTA`
+- `TEXT_MESSAGE_*`
+- `RUN_FINISHED`
+
+For this project, AG-UI is used to stream incident execution state for the SOC UI layer.
 
 ## Setup
 
@@ -91,10 +128,11 @@ export CYBERAGENT_SOURCE_LABEL="NovaCart demo collector"
 python backend/collector_agent.py
 ```
 
+The project integration endpoint also includes protocol discovery metadata:
+- `GET /websites/{website_id}/integration`
+
 ## Dummy website demo flow
-CyberAgent now includes two customer-side demo options:
-- an embedded integration simulator in the main dashboard
-- a separate standalone startup website in `dummy-site/` called `NovaCart`
+CyberAgent includes a separate standalone startup website in `dummy-site/` called `NovaCart`.
 
 Use it to demonstrate:
 1. normal user browsing
@@ -111,12 +149,13 @@ Those actions send real collector telemetry into the backend using the project t
 4. Paste the token into the NovaCart setup panel and click `Save config`
 5. Trigger `Send normal traffic` or `Login as customer` to show healthy telemetry
 6. Trigger `Simulate brute force`, `Simulate recon`, or `Simulate traffic spike`
-7. Switch back to the dashboard and show the incident queue, policy decision, agent trace, and final report
-8. Explain which threats were auto-contained and which required approval
+7. Switch back to the dashboard and show the incident queue, policy decision, A2A-style agent trace, and final report
+8. Optionally open the A2A registry or AG-UI stream endpoint to demonstrate that the same incident is also exposed through agent protocols
+9. Explain which threats were auto-contained and which required approval
 
 ## Core demo story
 CyberAgent is not just a dashboard. It is a startup-focused AI SOC prototype where:
 - collectors bring telemetry into the platform
-- specialized agents collaborate on security decisions
+- specialized agents collaborate on security decisions through explicit agent contracts
 - automation handles repetitive response work
 - humans stay in control for higher-risk actions

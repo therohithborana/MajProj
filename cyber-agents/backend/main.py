@@ -1,16 +1,23 @@
 import asyncio
 from contextlib import suppress
 from datetime import datetime, timezone
+import json
 import uuid
 
 from bson import ObjectId
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
-from agents import action_graph, detection_graph
+from agent_protocols import (
+    AGUI_CONTENT_TYPE,
+    SocA2ACoordinator,
+    agui_sse,
+    build_agui_event_stream,
+)
 from auth import require_collector, require_user
 from db import db, init_db
-from models import ApprovalRequest, CollectorIngestRequest, serialize_document, utc_now
+from models import AGUIRunRequest, A2AInvokeRequest, ApprovalRequest, CollectorIngestRequest, serialize_document, utc_now
 from red_team import simulate_attack
 from routes.auth import router as auth_router
 from routes.websites import router as websites_router
@@ -35,6 +42,7 @@ connected_clients = []
 attack_running = False
 auto_task = None
 auto_website_id = None
+coordinator = SocA2ACoordinator()
 
 STAGE_MESSAGES = {
     "normalization": "Normalization Agent converted raw collector telemetry into a shared event schema.",
@@ -88,6 +96,8 @@ def _persist_incident(website_id: str, state: dict):
         "incident_report": state.get("incident_report"),
         "agent_trace": state.get("agent_trace", []),
         "agent_messages": state.get("agent_messages", []),
+        "protocol_trace": state.get("protocol_trace", []),
+        "runtime_metadata": state.get("runtime_metadata", {}),
         "llm_usage": state.get("llm_usage", {}),
         "created_at": now,
         "updated_at": now,
@@ -188,8 +198,40 @@ def _fetch_attack_events(website_id: str, attack_id: str):
     return events
 
 
+def _telemetry_snapshot(website_id: str):
+    total_events = db.events.count_documents({"website_id": website_id})
+    counts = {
+        event_type: db.events.count_documents({"website_id": website_id, "event_type": event_type})
+        for event_type in ["access", "auth", "network"]
+    }
+    recent_events = [
+        serialize_document(document)
+        for document in db.events.find({"website_id": website_id}).sort("timestamp", -1).limit(12)
+    ]
+    return {
+        "total_events": total_events,
+        "counts": counts,
+        "recent_events": recent_events,
+    }
+
+
 async def _broadcast_trace(website_id: str, attack_id: str, state: dict):
+    protocol_lookup = {
+        item.get("to_agent"): item for item in state.get("protocol_trace", []) if item.get("to_agent")
+    }
+    stage_to_protocol_agent = {
+        "normalization": "normalization_agent",
+        "detection": "detection_agent",
+        "correlation": "correlation_agent",
+        "classification": "classification_agent",
+        "investigation": "investigation_agent",
+        "response_planning": "response_planning_agent",
+        "policy_decision": "policy_agent",
+        "action": "action_agent",
+        "report": "reporting_agent",
+    }
     for entry in state.get("agent_trace", []):
+        public_name = stage_to_protocol_agent.get(entry["stage"])
         await broadcast(
             "agent_update",
             {
@@ -198,7 +240,9 @@ async def _broadcast_trace(website_id: str, attack_id: str, state: dict):
                 "current_stage": entry["stage"],
                 "message": entry["summary"],
                 "agent_trace_entry": entry,
+                "protocol_trace_entry": protocol_lookup.get(public_name),
                 "policy_decision": state.get("policy_decision"),
+                "runtime_metadata": state.get("runtime_metadata", {}),
             },
         )
         await asyncio.sleep(0.3)
@@ -236,7 +280,7 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
     )
 
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, detection_graph.invoke, initial_state)
+    result = await loop.run_in_executor(None, coordinator.run_detection_pipeline, initial_state)
     result["website_id"] = website["_id"]
 
     await _broadcast_trace(website["_id"], attack_id, result)
@@ -257,7 +301,7 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
         )
         final_state = await loop.run_in_executor(
             None,
-            action_graph.invoke,
+            coordinator.run_resolution_pipeline,
             {**result, "approval_status": "auto_approved"},
         )
         final_state["website_id"] = website["_id"]
@@ -275,6 +319,8 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
                 "policy_decision": final_state.get("policy_decision"),
                 "agent_trace": final_state.get("agent_trace"),
                 "agent_messages": final_state.get("agent_messages"),
+                "protocol_trace": final_state.get("protocol_trace"),
+                "runtime_metadata": final_state.get("runtime_metadata", {}),
                 "llm_usage": final_state.get("llm_usage"),
                 "message": "Autonomous response completed and the incident report is ready.",
             },
@@ -288,12 +334,14 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
                 "current_stage": "awaiting_approval",
                 "message": "Policy Agent requires human approval before containment is executed.",
                 "policy_decision": result.get("policy_decision"),
+                "protocol_trace": result.get("protocol_trace"),
+                "runtime_metadata": result.get("runtime_metadata", {}),
             },
         )
     else:
         final_state = await loop.run_in_executor(
             None,
-            action_graph.invoke,
+            coordinator.run_resolution_pipeline,
             {**result, "approval_status": "manual_required"},
         )
         final_state["website_id"] = website["_id"]
@@ -311,6 +359,8 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
                 "policy_decision": final_state.get("policy_decision"),
                 "agent_trace": final_state.get("agent_trace"),
                 "agent_messages": final_state.get("agent_messages"),
+                "protocol_trace": final_state.get("protocol_trace"),
+                "runtime_metadata": final_state.get("runtime_metadata", {}),
                 "llm_usage": final_state.get("llm_usage"),
                 "message": "Incident was escalated for manual follow-up with a completed AI report.",
             },
@@ -369,6 +419,20 @@ async def websocket_endpoint(websocket: WebSocket):
 async def ingest_collector_events(payload: CollectorIngestRequest, website=Depends(require_collector)):
     attack_id = payload.attack_id or (uuid.uuid4().hex[:8].upper() if payload.run_detection else None)
     normalized_events = _store_events(website, attack_id, [event.model_dump() for event in payload.events])
+    telemetry_snapshot = _telemetry_snapshot(website["_id"])
+    await broadcast(
+        "telemetry_update",
+        {
+            "website_id": website["_id"],
+            "attack_id": attack_id,
+            "events_ingested": len(normalized_events),
+            "source_label": payload.source_label,
+            "run_detection": payload.run_detection,
+            "telemetry": telemetry_snapshot,
+            "recent_events": telemetry_snapshot["recent_events"][: min(4, len(telemetry_snapshot["recent_events"]))],
+            "message": f"Collector received {len(normalized_events)} event(s) from {payload.source_label or 'customer website'}.",
+        },
+    )
     if payload.run_detection and attack_id:
         simulation = _build_collector_simulation(website["_id"], attack_id, payload.source_label)
         await _run_detection_pipeline(website, attack_id, simulation)
@@ -412,20 +476,7 @@ async def list_incidents_for_website(website_id: str, user=Depends(require_user)
 @app.get("/websites/{website_id}/telemetry")
 async def website_telemetry(website_id: str, user=Depends(require_user)):
     _get_website_or_404(user["_id"], website_id)
-    total_events = db.events.count_documents({"website_id": website_id})
-    counts = {
-        event_type: db.events.count_documents({"website_id": website_id, "event_type": event_type})
-        for event_type in ["access", "auth", "network"]
-    }
-    recent_events = [
-        serialize_document(document)
-        for document in db.events.find({"website_id": website_id}).sort("timestamp", -1).limit(12)
-    ]
-    return {
-        "total_events": total_events,
-        "counts": counts,
-        "recent_events": recent_events,
-    }
+    return _telemetry_snapshot(website_id)
 
 
 @app.get("/incidents/{incident_id}")
@@ -437,6 +488,76 @@ async def get_incident(incident_id: str, user=Depends(require_user)):
     if not website:
         raise HTTPException(status_code=404, detail="Incident not found")
     return serialize_document(incident)
+
+
+@app.get("/a2a/agents")
+async def list_a2a_agents():
+    base_url = "http://localhost:8000"
+    return {
+        "root_agent": coordinator.root_card(base_url),
+        "agents": coordinator.agent_cards(base_url),
+    }
+
+
+@app.get("/a2a/soc_coordinator/agent-card.json")
+async def get_root_agent_card():
+    return coordinator.root_card("http://localhost:8000")
+
+
+@app.get("/a2a/agents/{agent_name}/agent-card.json")
+async def get_agent_card(agent_name: str):
+    cards = {card["name"]: card for card in coordinator.agent_cards("http://localhost:8000")}
+    card = cards.get(agent_name)
+    if not card:
+        raise HTTPException(status_code=404, detail="Agent card not found")
+    return card
+
+
+@app.post("/a2a/agents/{agent_name}/invoke")
+async def invoke_a2a_agent(agent_name: str, payload: A2AInvokeRequest):
+    if agent_name not in {card["name"] for card in coordinator.agent_cards("http://localhost:8000")}:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    state = coordinator.invoke_agent(agent_name, payload.state, payload.caller)
+    trace_entry = state.get("protocol_trace", [])[-1] if state.get("protocol_trace") else None
+    return {
+        "task_id": payload.task_id or (trace_entry or {}).get("task_id"),
+        "agent": agent_name,
+        "runtime": state.get("runtime_metadata", {}),
+        "protocol_trace_entry": trace_entry,
+        "state": serialize_document(state),
+    }
+
+
+@app.post("/a2a/soc_coordinator/run")
+async def run_root_coordinator(payload: A2AInvokeRequest):
+    state = coordinator.run_detection_pipeline(payload.state)
+    return {
+        "task_id": payload.task_id or uuid.uuid4().hex,
+        "agent": "soc_coordinator",
+        "runtime": state.get("runtime_metadata", {}),
+        "state": serialize_document(state),
+    }
+
+
+@app.post("/agui/runs")
+async def agui_run(payload: AGUIRunRequest, user=Depends(require_user)):
+    incident = db.incidents.find_one({"attack_id": payload.incident_id})
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    website = db.websites.find_one(_website_query(user["_id"], incident["website_id"]))
+    if not website:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    serialized_incident = serialize_document(incident)
+    run_id = payload.run_id or uuid.uuid4().hex
+    events = build_agui_event_stream(serialized_incident, payload.thread_id, run_id)
+
+    async def event_generator():
+        for event in events:
+            yield agui_sse(event)
+            await asyncio.sleep(0.05)
+
+    return StreamingResponse(event_generator(), media_type=AGUI_CONTENT_TYPE)
 
 
 @app.post("/incidents/{incident_id}/approve")
@@ -465,6 +586,8 @@ async def approve_incident(incident_id: str, body: ApprovalRequest, user=Depends
         "incident_report": incident.get("incident_report"),
         "agent_trace": incident.get("agent_trace", []),
         "agent_messages": incident.get("agent_messages", []),
+        "protocol_trace": incident.get("protocol_trace", []),
+        "runtime_metadata": incident.get("runtime_metadata", {}),
         "llm_usage": incident.get("llm_usage", {}),
         "current_stage": incident.get("current_stage"),
     }
@@ -482,7 +605,7 @@ async def approve_incident(incident_id: str, body: ApprovalRequest, user=Depends
     )
 
     loop = asyncio.get_event_loop()
-    final_state = await loop.run_in_executor(None, action_graph.invoke, state)
+    final_state = await loop.run_in_executor(None, coordinator.run_resolution_pipeline, state)
     final_state["website_id"] = incident["website_id"]
     active_incidents[incident_id] = final_state
     _persist_incident(incident["website_id"], final_state)
@@ -499,6 +622,8 @@ async def approve_incident(incident_id: str, body: ApprovalRequest, user=Depends
             "policy_decision": final_state.get("policy_decision"),
             "agent_trace": final_state.get("agent_trace"),
             "agent_messages": final_state.get("agent_messages"),
+            "protocol_trace": final_state.get("protocol_trace"),
+            "runtime_metadata": final_state.get("runtime_metadata", {}),
             "llm_usage": final_state.get("llm_usage"),
             "message": "Reporting Agent generated the incident report.",
         },

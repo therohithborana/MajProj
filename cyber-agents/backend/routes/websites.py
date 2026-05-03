@@ -144,6 +144,12 @@ async def get_website_integration(website_id: str, request: Request, user=Depend
         "ingest_url": f"{origin}/collector/ingest",
         "token_header": "X-Collector-Token",
         "collector_token": token,
+        "protocols": {
+            "a2a_registry_url": f"{origin}/a2a/agents",
+            "a2a_root_agent_card": f"{origin}/a2a/soc_coordinator/agent-card.json",
+            "agui_run_url": f"{origin}/agui/runs",
+            "runtime": "google-adk-compatible",
+        },
         "sample_payload": example_payload,
         "curl_example": (
             f"curl -X POST {origin}/collector/ingest "

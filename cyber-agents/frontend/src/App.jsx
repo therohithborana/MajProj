@@ -234,6 +234,10 @@ function App() {
         };
         setFeed((current) => [entry, ...current].slice(0, 80));
 
+        if (payload.type === "telemetry_update" && payload.data?.website_id === selectedWebsiteId && payload.data?.telemetry) {
+          setTelemetry(payload.data.telemetry);
+        }
+
         if (payload.data?.attack_id) {
           setIncidents((current) => {
             const existing = current[payload.data.attack_id] || {};
@@ -854,6 +858,44 @@ Body: {
                       </div>
                     </div>
                   </div>
+
+                  <div className="card" style={{marginBottom: 24}}>
+                    <div className="card-title" style={{marginBottom: 16}}>Agent Protocol Surface</div>
+                    <div className="grid-layout">
+                      <div style={integrationPanelStyle}>
+                        <div style={eyebrowStyle}>A2A Discovery</div>
+                        <div style={{display: 'grid', gap: 12}}>
+                          <div>
+                            <div style={{fontSize: 12, color: 'var(--text-subtle)', marginBottom: 4}}>Agent Registry</div>
+                            <div style={tokenStyle}>{integration?.protocols?.a2a_registry_url || `${API_BASE}/a2a/agents`}</div>
+                          </div>
+                          <div>
+                            <div style={{fontSize: 12, color: 'var(--text-subtle)', marginBottom: 4}}>Root Agent Card</div>
+                            <div style={tokenStyle}>{integration?.protocols?.a2a_root_agent_card || `${API_BASE}/a2a/soc_coordinator/agent-card.json`}</div>
+                          </div>
+                          <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6}}>
+                            The SOC coordinator exposes named agents for normalization, detection, correlation, classification,
+                            investigation, response planning, policy, action, and reporting through A2A-style invoke contracts.
+                          </div>
+                        </div>
+                      </div>
+                      <div style={codePanelStyle}>
+                        <div style={eyebrowStyle}>AG-UI Run Endpoint</div>
+                        <pre style={codeBlockStyle}>{`POST ${integration?.protocols?.agui_run_url || `${API_BASE}/agui/runs`}
+Body: {
+  "incident_id": "<incident-id>",
+  "thread_id": "cyberagent-soc-thread"
+}
+
+Streams:
+- RUN_STARTED
+- STATE_SNAPSHOT / STATE_DELTA
+- TOOL_CALL_START / TOOL_CALL_RESULT
+- TEXT_MESSAGE_CONTENT
+- RUN_FINISHED`}</pre>
+                      </div>
+                    </div>
+                  </div>
                   
                   <div className="card">
                     <div className="card-title" style={{marginBottom: 16}}>Normalized Event Streams</div>
@@ -957,6 +999,28 @@ Body: {
                             </div>
                           ))}
                         </div>
+
+                        {(selectedIncident.protocol_trace || []).length ? (
+                          <>
+                            <div className="card-title" style={{marginTop: 24, marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>A2A INVOCATION TRACE</div>
+                            <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
+                              {(selectedIncident.protocol_trace || []).map((entry, idx) => (
+                                <div key={idx} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                                  <div className="flex-between" style={{marginBottom: 8}}>
+                                    <span style={{fontWeight: 600, fontSize: 13}}>{entry.from_agent} → {entry.to_agent}</span>
+                                    <span style={{fontSize: 12, color: 'var(--text-subtle)'}}>{entry.protocol}</span>
+                                  </div>
+                                  <div style={{fontSize: 13, color: 'var(--text-muted)', marginBottom: 8}}>
+                                    Runtime: {entry.runtime} • Task ID: {entry.task_id}
+                                  </div>
+                                  <div style={{fontSize: 12, color: 'var(--text-subtle)', lineHeight: 1.6}}>
+                                    Stage: {entry.output_summary?.current_stage || "n/a"} • Approval: {entry.output_summary?.approval_status || "n/a"}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </>
+                        ) : null}
                       </div>
                     ) : (
                       <div className="card" style={{display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 400, color: 'var(--text-muted)'}}>
