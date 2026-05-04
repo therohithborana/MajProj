@@ -9,6 +9,7 @@ from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconn
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
+from adk_stage2 import get_stage2_a2a_apps, get_stage2_agent_card, get_stage2_runtime_summary, run_stage2_review
 from agent_protocols import (
     AGUI_CONTENT_TYPE,
     SocA2ACoordinator,
@@ -17,7 +18,7 @@ from agent_protocols import (
 )
 from auth import require_collector, require_user
 from db import db, init_db
-from models import AGUIRunRequest, A2AInvokeRequest, ApprovalRequest, CollectorIngestRequest, serialize_document, utc_now
+from models import AGUIRunRequest, A2AInvokeRequest, ApprovalRequest, CollectorIngestRequest, Stage2InvokeRequest, serialize_document, utc_now
 from red_team import simulate_attack
 from routes.auth import router as auth_router
 from routes.websites import router as websites_router
@@ -36,6 +37,8 @@ init_db()
 
 app.include_router(auth_router)
 app.include_router(websites_router)
+for mount_path, mounted_app in get_stage2_a2a_apps().items():
+    app.mount(mount_path, mounted_app)
 
 active_incidents = {}
 connected_clients = []
@@ -282,6 +285,7 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, coordinator.run_detection_pipeline, initial_state)
     result["website_id"] = website["_id"]
+    result.setdefault("runtime_metadata", {})["stage2"] = get_stage2_runtime_summary()
 
     await _broadcast_trace(website["_id"], attack_id, result)
 
@@ -305,6 +309,7 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
             {**result, "approval_status": "auto_approved"},
         )
         final_state["website_id"] = website["_id"]
+        final_state.setdefault("runtime_metadata", {})["stage2"] = get_stage2_runtime_summary()
         active_incidents[attack_id] = final_state
         _persist_incident(website["_id"], final_state)
         await broadcast(
@@ -345,6 +350,7 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
             {**result, "approval_status": "manual_required"},
         )
         final_state["website_id"] = website["_id"]
+        final_state.setdefault("runtime_metadata", {})["stage2"] = get_stage2_runtime_summary()
         active_incidents[attack_id] = final_state
         _persist_incident(website["_id"], final_state)
         await broadcast(
@@ -490,12 +496,49 @@ async def get_incident(incident_id: str, user=Depends(require_user)):
     return serialize_document(incident)
 
 
+@app.get("/stage2/runtime")
+async def stage2_runtime():
+    return get_stage2_runtime_summary("http://localhost:8000")
+
+
+@app.get("/stage2/a2a/{agent_name}/.well-known/agent-card.json")
+async def stage2_agent_card(agent_name: str):
+    card = get_stage2_agent_card(agent_name, "http://localhost:8000")
+    if not card:
+        raise HTTPException(status_code=404, detail="Stage 2 agent not found")
+    return card
+
+
+@app.post("/stage2/a2a/{agent_name}/invoke")
+async def stage2_agent_invoke(agent_name: str, payload: Stage2InvokeRequest):
+    agent_key = None
+    if agent_name == "classification_agent":
+        agent_key = "classification"
+    elif agent_name == "investigation_agent":
+        agent_key = "investigation"
+    elif agent_name == "policy_agent":
+        agent_key = "policy"
+    if not agent_key:
+        raise HTTPException(status_code=404, detail="Stage 2 agent not found")
+
+    prompt = payload.prompt or json.dumps(payload.payload, ensure_ascii=False)
+    result = run_stage2_review(agent_key, prompt)
+    if result is None:
+        raise HTTPException(status_code=503, detail="Stage 2 agent runtime unavailable")
+    return {
+        "agent": agent_name,
+        "runtime": "google-adk",
+        "result": result,
+    }
+
+
 @app.get("/a2a/agents")
 async def list_a2a_agents():
     base_url = "http://localhost:8000"
     return {
         "root_agent": coordinator.root_card(base_url),
         "agents": coordinator.agent_cards(base_url),
+        "stage2": get_stage2_runtime_summary(base_url),
     }
 
 
@@ -607,6 +650,7 @@ async def approve_incident(incident_id: str, body: ApprovalRequest, user=Depends
     loop = asyncio.get_event_loop()
     final_state = await loop.run_in_executor(None, coordinator.run_resolution_pipeline, state)
     final_state["website_id"] = incident["website_id"]
+    final_state.setdefault("runtime_metadata", {})["stage2"] = get_stage2_runtime_summary()
     active_incidents[incident_id] = final_state
     _persist_incident(incident["website_id"], final_state)
 

@@ -5,6 +5,7 @@ from typing import TypedDict
 
 from langgraph.graph import END, StateGraph
 
+from adk_stage2 import STAGE2_AVAILABLE, run_stage2_review
 from gemini_client import call_gemini
 
 
@@ -112,9 +113,11 @@ def _record_message(
     state["agent_messages"] = messages
 
 
-def _mark_llm_usage(state: AgentState, agent: str, used: bool):
+def _mark_llm_usage(state: AgentState, agent: str, used: bool, runtime: str | None = None):
     usage = dict(state.get("llm_usage", {}))
     usage[agent] = {"used": used}
+    if runtime:
+        usage[agent]["runtime"] = runtime
     state["llm_usage"] = usage
 
 
@@ -503,7 +506,9 @@ Rules:
 """.strip()
 
     try:
-        parsed = _llm_json(CLASSIFIER_SYSTEM_PROMPT, classifier_prompt)
+        parsed = run_stage2_review("classification", classifier_prompt) if STAGE2_AVAILABLE else None
+        if not parsed:
+            parsed = _llm_json(CLASSIFIER_SYSTEM_PROMPT, classifier_prompt)
         llm_class = parsed["predicted_class"]
         llm_scores = _normalize_scores(parsed.get("confidence_scores", {}), llm_class)
         llm_conf = round(float(parsed["confidence"]), 4)
@@ -511,9 +516,14 @@ Rules:
         confidence_scores = llm_scores
         confidence = min(max(llm_conf, 0.0), 1.0)
         severity = parsed.get("severity", severity)
-        confidence_source = "llm_reviewed"
+        confidence_source = "adk_llm" if parsed.get("_stage2_runtime") else "llm_reviewed"
         reasoning = parsed.get("reasoning", reasoning)
-        _mark_llm_usage(state, "Threat Classification Agent", True)
+        _mark_llm_usage(
+            state,
+            "Threat Classification Agent",
+            True,
+            "google_adk" if parsed.get("_stage2_runtime") else "direct_gemini",
+        )
     except Exception:
         _mark_llm_usage(state, "Threat Classification Agent", False)
 
@@ -640,14 +650,21 @@ Rules:
 """.strip()
 
     try:
-        parsed = _llm_json(INVESTIGATOR_SYSTEM_PROMPT, investigator_prompt)
+        parsed = run_stage2_review("investigation", investigator_prompt) if STAGE2_AVAILABLE else None
+        if not parsed:
+            parsed = _llm_json(INVESTIGATOR_SYSTEM_PROMPT, investigator_prompt)
         state["investigation"] = {
             **fallback,
             **parsed,
             "timeline": parsed.get("timeline") or fallback["timeline"],
             "evidence": parsed.get("evidence") or fallback["evidence"],
         }
-        _mark_llm_usage(state, "Investigation Agent", True)
+        _mark_llm_usage(
+            state,
+            "Investigation Agent",
+            True,
+            "google_adk" if parsed.get("_stage2_runtime") else "direct_gemini",
+        )
     except Exception:
         state["investigation"] = fallback
         _mark_llm_usage(state, "Investigation Agent", False)
@@ -768,7 +785,7 @@ Rules:
         if not isinstance(parsed, dict) or "steps" not in parsed:
             raise ValueError("Invalid mitigation plan")
         state["mitigation_plan"] = parsed
-        _mark_llm_usage(state, "Response Planning Agent", True)
+        _mark_llm_usage(state, "Response Planning Agent", True, "direct_gemini")
     except Exception:
         state["mitigation_plan"] = fallback
         _mark_llm_usage(state, "Response Planning Agent", False)
@@ -856,14 +873,21 @@ Rules:
     safety_notes = []
     decision_source = "heuristic"
     try:
-        parsed = _llm_json(POLICY_SYSTEM_PROMPT, policy_prompt)
+        parsed = run_stage2_review("policy", policy_prompt) if STAGE2_AVAILABLE else None
+        if not parsed:
+            parsed = _llm_json(POLICY_SYSTEM_PROMPT, policy_prompt)
         mode = parsed.get("mode", mode)
         if mode not in {"auto_execute", "approval_required", "manual_escalation"}:
             mode = mode
         reason = parsed.get("reason", reason)
         safety_notes = parsed.get("safety_notes", [])
-        decision_source = "llm_reviewed"
-        _mark_llm_usage(state, "Policy Agent", True)
+        decision_source = "adk_llm" if parsed.get("_stage2_runtime") else "llm_reviewed"
+        _mark_llm_usage(
+            state,
+            "Policy Agent",
+            True,
+            "google_adk" if parsed.get("_stage2_runtime") else "direct_gemini",
+        )
     except Exception:
         _mark_llm_usage(state, "Policy Agent", False)
 
@@ -1057,7 +1081,7 @@ Return JSON only.
         if not isinstance(parsed, dict) or "executive_summary" not in parsed:
             raise ValueError("Invalid incident report")
         state["incident_report"] = parsed
-        _mark_llm_usage(state, "Reporting Agent", True)
+        _mark_llm_usage(state, "Reporting Agent", True, "direct_gemini")
     except Exception:
         state["incident_report"] = fallback
         _mark_llm_usage(state, "Reporting Agent", False)

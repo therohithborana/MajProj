@@ -2,10 +2,11 @@
 
 CyberAgent is a multi-agent cybersecurity SaaS prototype for startup web applications. A startup creates a protected project, installs a lightweight collector, streams `access`, `auth`, and `network` telemetry, and lets AI/security agents detect, investigate, classify, and respond to threats with a `70% automation / 30% human oversight` model.
 
-The project now includes a `phase-1 protocol migration` toward:
+The project now includes:
 - `A2A` for agent-to-agent invocation contracts
 - `AG-UI` for frontend-facing event streams
 - a `Google ADK-compatible coordinator runtime` pattern for the root SOC orchestrator
+- a `Stage 2 Google ADK native reasoning slice` for classification, investigation, and policy review
 
 This is intentionally a practical migration step, not a risky full rewrite. The current backend still uses the working CyberAgent logic, but it now exposes named agent services, A2A-style agent cards/invoke endpoints, and AG-UI event streams over the same incident pipeline.
 
@@ -68,6 +69,28 @@ This returns an `AG-UI` event stream with:
 
 For this project, AG-UI is used to stream incident execution state for the SOC UI layer.
 
+## Stage 2 runtime
+
+CyberAgent now also exposes a Stage 2 runtime based on the official `google-adk` package.
+
+What Stage 2 changes:
+- `Threat Classification Agent` now prefers a native ADK runner
+- `Investigation Agent` now prefers a native ADK runner
+- `Policy Agent` now prefers a native ADK runner
+- those same agents are also mounted as real ADK A2A apps
+
+Stage 2 runtime discovery:
+- `GET /stage2/runtime`
+
+Mounted Stage 2 A2A apps:
+- `/stage2/a2a/classification`
+- `/stage2/a2a/investigation`
+- `/stage2/a2a/policy`
+
+This means the project now has:
+- Stage 1 coordinator/protocol tracing across the full pipeline
+- Stage 2 native ADK reasoning for the highest-value analyst stages
+
 ## Setup
 
 ### 1. Backend prerequisites
@@ -79,9 +102,12 @@ Example `.env`:
 
 ```env
 GEMINI_API_KEY=your_key_here
+GOOGLE_API_KEY=your_key_here
 MONGO_URI=mongodb://localhost:27017
 MONGO_DB_NAME=cyberagent
 ```
+
+If `GOOGLE_API_KEY` is not set, the backend will try to reuse `GEMINI_API_KEY` for the Stage 2 ADK runtime.
 
 ### 2. Run backend
 ```bash

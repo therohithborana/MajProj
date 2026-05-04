@@ -877,6 +877,9 @@ Body: {
                             The SOC coordinator exposes named agents for normalization, detection, correlation, classification,
                             investigation, response planning, policy, action, and reporting through A2A-style invoke contracts.
                           </div>
+                          <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6}}>
+                            Stage 2 runtime: {integration?.protocols?.stage2?.enabled ? 'Google ADK native reasoning enabled.' : 'Stage 2 runtime unavailable.'}
+                          </div>
                         </div>
                       </div>
                       <div style={codePanelStyle}>
@@ -896,6 +899,24 @@ Streams:
                       </div>
                     </div>
                   </div>
+
+                  {integration?.protocols?.stage2?.a2a_agents?.length ? (
+                    <div className="card" style={{marginBottom: 24}}>
+                      <div className="card-title" style={{marginBottom: 16}}>Stage 2 ADK Agents</div>
+                      <div style={{display: 'grid', gap: 12}}>
+                        {integration.protocols.stage2.a2a_agents.map((agent) => (
+                          <div key={agent.name} style={traceCardStyle}>
+                            <div className="flex-between" style={{marginBottom: 8}}>
+                              <span style={{fontWeight: 600, fontSize: 13}}>{agent.name}</span>
+                              <span style={{fontSize: 12, color: 'var(--color-gold)'}}>ADK + A2A</span>
+                            </div>
+                            <div style={{fontSize: 13, color: 'var(--text-muted)', marginBottom: 8}}>{agent.description}</div>
+                            <div style={tokenStyle}>{agent.agent_card_url || agent.base_url}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                   
                   <div className="card">
                     <div className="card-title" style={{marginBottom: 16}}>Normalized Event Streams</div>
@@ -974,6 +995,10 @@ Streams:
                           <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
                             <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>RISK SCORE</div>
                             <div style={{fontWeight: 600, fontSize: 13}}>{selectedIncident.classification?.risk_score || '—'}</div>
+                          </div>
+                          <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>CLASSIFIER RUNTIME</div>
+                            <div style={{fontWeight: 600, fontSize: 13}}>{selectedIncident.llm_usage?.["Threat Classification Agent"]?.runtime || '—'}</div>
                           </div>
                         </div>
 
