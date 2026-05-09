@@ -20,3 +20,5 @@ def init_db():
     db.websites.create_index([("user_id", ASCENDING), ("name", ASCENDING)])
     db.incidents.create_index([("website_id", ASCENDING), ("created_at", ASCENDING)])
     db.incidents.create_index([("attack_id", ASCENDING)], unique=True)
+    db.telemetry_events.create_index([("website_id", ASCENDING), ("received_at", ASCENDING)])
+    db.telemetry_events.create_index([("event_hash", ASCENDING)], unique=True)

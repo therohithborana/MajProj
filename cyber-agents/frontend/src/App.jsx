@@ -126,6 +126,7 @@ export default function App() {
   const [incidents, setIncidents] = useState({});
   const [selectedIncidentId, setSelectedIncidentId] = useState("");
   const [feed, setFeed] = useState([]);
+  const [telemetryEvents, setTelemetryEvents] = useState([]);
   const [connected, setConnected] = useState(false);
   const [autoRunning, setAutoRunning] = useState(false);
   const [decisionLoading, setDecisionLoading] = useState({});
@@ -220,6 +221,10 @@ export default function App() {
           if (payload.data.website_id === selectedWebsiteId) {
             setSelectedIncidentId(payload.data.attack_id);
           }
+        }
+
+        if (payload.type === "telemetry_event") {
+          setTelemetryEvents((current) => [payload.data.event, ...current].slice(0, 30));
         }
       };
       socket.onclose = () => {
@@ -594,6 +599,27 @@ export default function App() {
                 </div>
               </Section>
 
+              <Section title="Realtime telemetry" eyebrow="Collector events">
+                <div style={{ display: "grid", gap: 8, maxHeight: 260, overflowY: "auto" }}>
+                  {telemetryEvents.filter((event) => event.website_id === selectedWebsiteId).map((event) => (
+                    <div key={event.event_hash} style={feedCardStyle}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 6 }}>
+                        <div style={{ fontWeight: 650 }}>
+                          {event.method} {event.path}
+                        </div>
+                        <StatusPill color={event.status >= 400 ? colors.amber : colors.green}>{event.status}</StatusPill>
+                      </div>
+                      <div style={{ color: colors.muted, fontSize: 12 }}>
+                        {event.ip} - {event.parser} - {new Date(event.received_at).toLocaleTimeString()}
+                      </div>
+                    </div>
+                  ))}
+                  {!telemetryEvents.some((event) => event.website_id === selectedWebsiteId) ? (
+                    <div style={{ color: colors.muted }}>No real collector events received in this browser session.</div>
+                  ) : null}
+                </div>
+              </Section>
+
               <div style={miniStatsGridStyle}>
                 <StatCard label="Total incidents" value={stats.total} />
                 <StatCard label="Pending approval" value={stats.pending} />
@@ -639,7 +665,10 @@ export default function App() {
                       <div style={emptyStateStyle}>Select an incident to inspect its flow.</div>
                     ) : (
                       <>
-                        <Section title="Red Team Agent" eyebrow="Generated telemetry">
+                        <Section
+                          title={selectedIncident.simulation.source === "real_log_collector" ? "Real Log Collector" : "Red Team Agent"}
+                          eyebrow={selectedIncident.simulation.source === "real_log_collector" ? "Ingested telemetry" : "Generated telemetry"}
+                        >
                           <div style={statsGridStyle}>
                             <Field label="Scenario" value={selectedIncident.simulation.attack_profile.attack_type} />
                             <Field label="Primary source" value={selectedIncident.simulation.attack_profile.primary_src_ip} />
@@ -652,18 +681,31 @@ export default function App() {
                           <div style={{ color: colors.muted, lineHeight: 1.7, marginTop: 14 }}>
                             {selectedIncident.simulation.description}
                           </div>
-                          <LogBlock title="Access logs" lines={selectedIncident.simulation.telemetry.generated_logs.access} />
-                          <LogBlock title="Auth logs" lines={selectedIncident.simulation.telemetry.generated_logs.auth} />
-                          <LogBlock title="Network logs" lines={selectedIncident.simulation.telemetry.generated_logs.network} />
+                          <LogBlock
+                          title="Access logs"
+                          lines={selectedIncident?.simulation?.telemetry?.generated_logs?.access || []}/>
+                        <LogBlock
+                          title="Auth logs"
+                          lines={selectedIncident?.simulation?.telemetry?.generated_logs?.auth || []}/>
+                        <LogBlock
+                          title="Network logs"
+                          lines={selectedIncident?.simulation?.telemetry?.generated_logs?.network || []}/>
                         </Section>
-
                         {selectedIncident.telemetry ? (
                           <Section title="Log Monitor Agent" eyebrow="Telemetry ingestion">
                             <div style={statsGridStyle}>
                               <Field label="Observed logs" value={selectedIncident.telemetry.total_logs_observed} />
-                              <Field label="Access" value={selectedIncident.telemetry.log_counts.access} />
-                              <Field label="Auth" value={selectedIncident.telemetry.log_counts.auth} />
-                              <Field label="Network" value={selectedIncident.telemetry.log_counts.network} />
+                              <Field
+                                label="Access"
+                                value={selectedIncident?.telemetry?.log_counts?.access || 0}/>
+                              <Field
+                                label="Auth"
+                                value={selectedIncident?.telemetry?.log_counts?.auth || 0}
+                              />
+                              <Field
+                                label="Network"
+                                value={selectedIncident?.telemetry?.log_counts?.network || 0}
+                              />
                             </div>
                           </Section>
                         ) : null}

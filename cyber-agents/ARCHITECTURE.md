@@ -376,13 +376,62 @@ What is real in this project today:
 - distinct agents with distinct roles
 - real shared context passed through LangGraph
 - real raw log generation and monitoring flow
+- real local log ingestion through `/collector/ingest`
+- nginx/apache and JSON request log parsing
+- Windows-friendly file tailing with offset tracking
 - human approval gate
 - WebSocket-based stage updates
 - Gemini used only for planning and reporting
 
 What is still simulated:
-- the raw logs are synthetic rather than collected from a production server
 - attack classification logic is rule-based rather than model-based
 - mitigation commands are recommended and simulated, not executed on live infrastructure
 
 That makes CyberAgent a realistic multi-agent workflow prototype rather than a production SOC platform.
+
+## 13. Real Log Ingestion Architecture
+
+The real ingestion system adds a parallel source of telemetry without replacing the demo flow.
+
+### Components
+
+- `backend/parsers/access_log.py`
+  Parses nginx/apache combined access logs and the existing CyberAgent key-value access format.
+
+- `backend/parsers/json_log.py`
+  Parses structured JSON request logs with fields such as `ip`, `endpoint`, `status`, and `method`.
+
+- `backend/log_collectors/normalizer.py`
+  Converts parsed records into one stable telemetry event shape and into agent-compatible evidence lines.
+
+- `backend/watchers/file_tailer.py`
+  Polls local files, remembers byte offsets, reads appended lines, and posts them to `/collector/ingest`.
+
+- `POST /collector/ingest`
+  Validates the website, parses and normalizes the event, stores it in MongoDB, broadcasts it over WebSocket, and schedules a debounced incident analysis run.
+
+### Storage
+
+Real log events are stored in MongoDB collection `telemetry_events`.
+
+Important fields:
+- `website_id`
+- `source_type`
+- `timestamp`
+- `ip`
+- `method`
+- `path`
+- `status`
+- `user_agent`
+- `raw_line`
+- `event_hash`
+
+`event_hash` prevents duplicate ingestion if a collector retries the same line.
+
+### Pipeline Integration
+
+After a short debounce window, recent telemetry events for the website are converted into the same state shape the LangGraph pipeline already understands:
+
+`simulation -> telemetry -> anomaly -> classification -> mitigation_plan`
+
+For real logs, `simulation.source` is `real_log_collector`. This keeps the existing dashboard, MongoDB incident storage, approval flow, and WebSocket updates intact while replacing synthetic telemetry with real request evidence.

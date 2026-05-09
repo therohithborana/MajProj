@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from bson import ObjectId
 from pydantic import BaseModel, EmailStr, Field
@@ -12,6 +12,8 @@ def utc_now():
 def object_id_str(value):
     if isinstance(value, ObjectId):
         return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
     return value
 
 
@@ -22,6 +24,8 @@ def serialize_document(document):
     for key, value in document.items():
         if isinstance(value, ObjectId):
             serialized[key] = str(value)
+        elif isinstance(value, datetime):
+            serialized[key] = value.isoformat()
         elif isinstance(value, dict):
             serialized[key] = serialize_document(value)
         elif isinstance(value, list):
@@ -55,4 +59,18 @@ class WebsiteCreateRequest(BaseModel):
 
 class ApprovalRequest(BaseModel):
     decision: str
+
+
+class RealLogSourceRequest(BaseModel):
+    web_server: str = Field(default="nginx")
+    access_log_path: Optional[str] = None
+    json_log_path: Optional[str] = None
+
+
+class CollectorIngestRequest(BaseModel):
+    website_id: str = Field(min_length=1)
+    source_type: str = Field(default="access")
+    parser: str = Field(default="auto")
+    raw_line: Optional[str] = None
+    event: Optional[dict[str, Any]] = None
 

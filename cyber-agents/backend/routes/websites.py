@@ -5,7 +5,7 @@ from bson import ObjectId
 
 from auth import require_user
 from db import db
-from models import WebsiteCreateRequest, serialize_document, utc_now
+from models import RealLogSourceRequest, WebsiteCreateRequest, serialize_document, utc_now
 
 
 router = APIRouter(prefix="/websites", tags=["websites"])
@@ -100,6 +100,33 @@ async def connect_demo_site(website_id: str, user=Depends(require_user)):
                 "dummy_site": {
                     "enabled": True,
                     "runtime_log_paths": runtime_paths,
+                },
+                "updated_at": utc_now(),
+            }
+        },
+    )
+    updated = db.websites.find_one(query)
+    return serialize_document(updated)
+
+
+@router.post("/{website_id}/connect-real")
+async def connect_real_logs(website_id: str, payload: RealLogSourceRequest, user=Depends(require_user)):
+    query = _website_query(user["_id"], website_id)
+    website = db.websites.find_one(query)
+    if not website:
+        raise HTTPException(status_code=404, detail="Website not found")
+
+    db.websites.update_one(
+        query,
+        {
+            "$set": {
+                "connection_type": "real_logs",
+                "status": "waiting_for_logs",
+                "dummy_site_enabled": False,
+                "log_sources": {
+                    "web_server": payload.web_server,
+                    "access_log_path": payload.access_log_path,
+                    "json_log_path": payload.json_log_path,
                 },
                 "updated_at": utc_now(),
             }

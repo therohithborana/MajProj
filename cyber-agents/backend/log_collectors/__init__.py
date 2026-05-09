@@ -1,0 +1,1 @@
+from log_collectors.normalizer import normalize_event

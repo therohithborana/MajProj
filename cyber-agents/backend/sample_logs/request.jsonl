@@ -1,0 +1,2 @@
+{"ip":"192.168.1.10","endpoint":"/login","status":401,"method":"POST","user_agent":"demo-json-client"}
+{"ip":"192.168.1.11","endpoint":"/api/search","status":200,"method":"GET","user_agent":"demo-json-client"}

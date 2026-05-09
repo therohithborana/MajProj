@@ -1,0 +1,19 @@
+{
+  "api_base": "http://localhost:8000",
+  "website_id": "PASTE_WEBSITE_ID_HERE",
+  "collector_key": "",
+  "poll_seconds": 1,
+  "offset_store": "log_collectors/.collector_offsets.json",
+  "sources": [
+    {
+      "path": "sample_logs/access.log",
+      "source_type": "access",
+      "parser": "access"
+    },
+    {
+      "path": "sample_logs/request.jsonl",
+      "source_type": "access",
+      "parser": "json"
+    }
+  ]
+}

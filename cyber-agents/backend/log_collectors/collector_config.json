@@ -1,0 +1,19 @@
+{
+  "api_base": "http://127.0.0.1:8000",
+  "website_id": "69fdbe9a904b01537c0996fe",
+  "collector_key": "",
+  "poll_seconds": 1,
+  "offset_store": "log_collectors/.collector_offsets.json",
+  "sources": [
+    {
+      "path": "sample_logs/access.log",
+      "source_type": "access",
+      "parser": "access"
+    },
+    {
+      "path": "sample_logs/request.jsonl",
+      "source_type": "access",
+      "parser": "json"
+    }
+  ]
+}

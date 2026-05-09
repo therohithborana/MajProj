@@ -53,8 +53,13 @@ def _extract_value(line: str, key: str, default=""):
 
 
 def log_monitor(state: AgentState) -> AgentState:
-    log_paths = state["simulation"]["telemetry"]["log_paths"]
+    telemetry_source = state["simulation"]["telemetry"]
+    log_paths = telemetry_source.get("log_paths") or {}
+    generated_logs = telemetry_source.get("generated_logs") or {}
     recent_logs = {name: _read_recent_lines(path) for name, path in log_paths.items()}
+    for name in ("access", "auth", "network"):
+        if name not in recent_logs and generated_logs.get(name):
+            recent_logs[name] = generated_logs[name][-50:]
     total_logs = sum(len(lines) for lines in recent_logs.values())
 
     state["telemetry"] = {
@@ -88,6 +93,10 @@ def anomaly_detection(state: AgentState) -> AgentState:
         path = _extract_value(line, "path")
         if path:
             request_paths[path] += 1
+        src = _extract_value(line, "src")
+        status = _extract_value(line, "status")
+        if src and status in {"401", "403"} and any(marker in path.lower() for marker in ("login", "auth", "admin")):
+            failed_auth[src] += 1
 
     for line in auth_logs:
         src = _extract_value(line, "src")
