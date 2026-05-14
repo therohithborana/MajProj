@@ -3,12 +3,16 @@
 CyberAgent is a multi-agent cybersecurity SaaS prototype for startup web applications. A startup creates a protected project, installs a lightweight collector, streams `access`, `auth`, and `network` telemetry, and lets AI/security agents detect, investigate, classify, and respond to threats with a `70% automation / 30% human oversight` model.
 
 The project now includes:
+- `MCP tools` as the primary tool/runtime architecture
 - `A2A` for agent-to-agent invocation contracts
 - `AG-UI` for frontend-facing event streams
 - a `Google ADK-compatible coordinator runtime` pattern for the root SOC orchestrator
 - a `Stage 2 Google ADK native reasoning slice` for classification, investigation, and policy review
 
-This is intentionally a practical migration step, not a risky full rewrite. The current backend still uses the working CyberAgent logic, but it now exposes named agent services, A2A-style agent cards/invoke endpoints, and AG-UI event streams over the same incident pipeline.
+This is intentionally a practical migration step, not a risky full rewrite. The current backend still uses the working CyberAgent logic, but it now exposes:
+- an `MCP` tool registry and `tools/call` execution surface as the primary orchestration runtime
+- named agent services and A2A-style agent cards as optional protocol surfaces
+- AG-UI event streams over the same incident pipeline
 
 ## What makes this a major-project style build
 - Multi-tenant startup/project onboarding
@@ -44,6 +48,27 @@ Action Agent
 Reporting Agent
 
 ## Protocol surfaces
+
+### MCP
+CyberAgent now exposes:
+- `POST /mcp`
+- `GET /mcp/tools`
+
+Supported JSON-RPC methods:
+- `initialize`
+- `tools/list`
+- `tools/call`
+
+The primary multi-agent runtime now uses MCP-style tools for:
+- telemetry normalization
+- detection
+- correlation
+- classification
+- investigation
+- mitigation planning
+- policy review
+- action execution
+- report generation
 
 ### A2A
 CyberAgent now exposes:
@@ -88,8 +113,9 @@ Mounted Stage 2 A2A apps:
 - `/stage2/a2a/policy`
 
 This means the project now has:
+- MCP tools as the active orchestration runtime
 - Stage 1 coordinator/protocol tracing across the full pipeline
-- Stage 2 native ADK reasoning for the highest-value analyst stages
+- optional Stage 2 native ADK reasoning surfaces for experimentation
 
 ## Setup
 

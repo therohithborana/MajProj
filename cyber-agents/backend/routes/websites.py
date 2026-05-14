@@ -146,12 +146,21 @@ async def get_website_integration(website_id: str, request: Request, user=Depend
         "token_header": "X-Collector-Token",
         "collector_token": token,
         "protocols": {
+            "primary_runtime": "mcp_tools",
+            "mcp_endpoint": f"{origin}/mcp",
+            "mcp_tools_url": f"{origin}/mcp/tools",
+            "observability_url": f"{origin}/websites/{serialized['_id']}/observability",
             "a2a_registry_url": f"{origin}/a2a/agents",
             "a2a_root_agent_card": f"{origin}/a2a/soc_coordinator/agent-card.json",
             "agui_run_url": f"{origin}/agui/runs",
             "runtime": "google-adk-compatible",
             "stage2_runtime_url": f"{origin}/stage2/runtime",
             "stage2": get_stage2_runtime_summary(origin),
+            "opentelemetry": {
+                "enabled": True,
+                "collection_mode": "custom_security_events_plus_opentelemetry",
+                "heartbeat_interval_seconds": 8,
+            },
         },
         "sample_payload": example_payload,
         "curl_example": (

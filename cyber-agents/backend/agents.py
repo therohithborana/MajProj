@@ -5,7 +5,6 @@ from typing import TypedDict
 
 from langgraph.graph import END, StateGraph
 
-from adk_stage2 import STAGE2_AVAILABLE, run_stage2_review
 from gemini_client import call_gemini
 
 
@@ -506,9 +505,7 @@ Rules:
 """.strip()
 
     try:
-        parsed = run_stage2_review("classification", classifier_prompt) if STAGE2_AVAILABLE else None
-        if not parsed:
-            parsed = _llm_json(CLASSIFIER_SYSTEM_PROMPT, classifier_prompt)
+        parsed = _llm_json(CLASSIFIER_SYSTEM_PROMPT, classifier_prompt)
         llm_class = parsed["predicted_class"]
         llm_scores = _normalize_scores(parsed.get("confidence_scores", {}), llm_class)
         llm_conf = round(float(parsed["confidence"]), 4)
@@ -516,14 +513,9 @@ Rules:
         confidence_scores = llm_scores
         confidence = min(max(llm_conf, 0.0), 1.0)
         severity = parsed.get("severity", severity)
-        confidence_source = "adk_llm" if parsed.get("_stage2_runtime") else "llm_reviewed"
+        confidence_source = "llm_reviewed"
         reasoning = parsed.get("reasoning", reasoning)
-        _mark_llm_usage(
-            state,
-            "Threat Classification Agent",
-            True,
-            "google_adk" if parsed.get("_stage2_runtime") else "direct_gemini",
-        )
+        _mark_llm_usage(state, "Threat Classification Agent", True, "direct_gemini")
     except Exception:
         _mark_llm_usage(state, "Threat Classification Agent", False)
 
@@ -650,21 +642,14 @@ Rules:
 """.strip()
 
     try:
-        parsed = run_stage2_review("investigation", investigator_prompt) if STAGE2_AVAILABLE else None
-        if not parsed:
-            parsed = _llm_json(INVESTIGATOR_SYSTEM_PROMPT, investigator_prompt)
+        parsed = _llm_json(INVESTIGATOR_SYSTEM_PROMPT, investigator_prompt)
         state["investigation"] = {
             **fallback,
             **parsed,
             "timeline": parsed.get("timeline") or fallback["timeline"],
             "evidence": parsed.get("evidence") or fallback["evidence"],
         }
-        _mark_llm_usage(
-            state,
-            "Investigation Agent",
-            True,
-            "google_adk" if parsed.get("_stage2_runtime") else "direct_gemini",
-        )
+        _mark_llm_usage(state, "Investigation Agent", True, "direct_gemini")
     except Exception:
         state["investigation"] = fallback
         _mark_llm_usage(state, "Investigation Agent", False)
@@ -873,21 +858,14 @@ Rules:
     safety_notes = []
     decision_source = "heuristic"
     try:
-        parsed = run_stage2_review("policy", policy_prompt) if STAGE2_AVAILABLE else None
-        if not parsed:
-            parsed = _llm_json(POLICY_SYSTEM_PROMPT, policy_prompt)
+        parsed = _llm_json(POLICY_SYSTEM_PROMPT, policy_prompt)
         mode = parsed.get("mode", mode)
         if mode not in {"auto_execute", "approval_required", "manual_escalation"}:
             mode = mode
         reason = parsed.get("reason", reason)
         safety_notes = parsed.get("safety_notes", [])
-        decision_source = "adk_llm" if parsed.get("_stage2_runtime") else "llm_reviewed"
-        _mark_llm_usage(
-            state,
-            "Policy Agent",
-            True,
-            "google_adk" if parsed.get("_stage2_runtime") else "direct_gemini",
-        )
+        decision_source = "llm_reviewed"
+        _mark_llm_usage(state, "Policy Agent", True, "direct_gemini")
     except Exception:
         _mark_llm_usage(state, "Policy Agent", False)
 

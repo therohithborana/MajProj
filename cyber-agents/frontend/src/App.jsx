@@ -155,6 +155,13 @@ function App() {
   const [selectedIncidentId, setSelectedIncidentId] = useState("");
   const [feed, setFeed] = useState([]);
   const [telemetry, setTelemetry] = useState({ total_events: 0, counts: {}, recent_events: [] });
+  const [observability, setObservability] = useState({
+    enabled: false,
+    metrics: { event_type_counts: {}, failed_auth_events: 0, tool_executions: 0, incidents_detected: 0 },
+    recent_spans: [],
+    recent_alerts: [],
+    latest_tool: {},
+  });
   const [integration, setIntegration] = useState(null);
   const [connected, setConnected] = useState(false);
   const [autoRunning, setAutoRunning] = useState(false);
@@ -178,6 +185,13 @@ function App() {
       setWebsites([]);
       setSelectedWebsiteId("");
       setTelemetry({ total_events: 0, counts: {}, recent_events: [] });
+      setObservability({
+        enabled: false,
+        metrics: { event_type_counts: {}, failed_auth_events: 0, tool_executions: 0, incidents_detected: 0 },
+        recent_spans: [],
+        recent_alerts: [],
+        latest_tool: {},
+      });
       return;
     }
 
@@ -236,6 +250,13 @@ function App() {
 
         if (payload.type === "telemetry_update" && payload.data?.website_id === selectedWebsiteId && payload.data?.telemetry) {
           setTelemetry(payload.data.telemetry);
+          if (payload.data.observability) {
+            setObservability(payload.data.observability);
+          }
+        }
+
+        if (payload.type === "observability_update" && payload.data?.website_id === selectedWebsiteId && payload.data?.observability) {
+          setObservability(payload.data.observability);
         }
 
         if (payload.data?.attack_id) {
@@ -258,6 +279,7 @@ function App() {
                 action_result: payload.data.action_result || existing.action_result,
                 incident_report: payload.data.incident_report || existing.incident_report,
                 agent_trace: payload.data.agent_trace || existing.agent_trace,
+                tool_trace: payload.data.tool_trace || existing.tool_trace,
               },
             };
           });
@@ -292,9 +314,10 @@ function App() {
 
     async function loadWebsiteData() {
       try {
-        const [websiteIncidents, telemetryData, integrationData] = await Promise.all([
+        const [websiteIncidents, telemetryData, observabilityData, integrationData] = await Promise.all([
           apiFetch(`/websites/${selectedWebsiteId}/incidents`, {}, token),
           apiFetch(`/websites/${selectedWebsiteId}/telemetry`, {}, token),
+          apiFetch(`/websites/${selectedWebsiteId}/observability`, {}, token),
           apiFetch(`/websites/${selectedWebsiteId}/integration`, {}, token),
         ]);
         if (cancelled) {
@@ -308,6 +331,7 @@ function App() {
           return next;
         });
         setTelemetry(telemetryData);
+        setObservability(observabilityData);
         setIntegration(integrationData);
         setSelectedIncidentId((current) => current || websiteIncidents[0]?.attack_id || "");
       } catch (err) {
@@ -475,6 +499,13 @@ function App() {
     setSelectedIncidentId("");
     setIncidents({});
     setFeed([]);
+    setObservability({
+      enabled: false,
+      metrics: { event_type_counts: {}, failed_auth_events: 0, tool_executions: 0, incidents_detected: 0 },
+      recent_spans: [],
+      recent_alerts: [],
+      latest_tool: {},
+    });
     setIntegration(null);
     setShowNotifications(false);
     setShowProfileMenu(false);
@@ -829,6 +860,66 @@ function App() {
                       </div>
                     </div>
                   </div>
+
+                  <div className="grid-layout" style={{marginTop: 24}}>
+                    <div className="card">
+                      <div className="card-title" style={{marginBottom: 16}}>OpenTelemetry Monitor</div>
+                      <div className="grid-metrics" style={{gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12, marginBottom: 16}}>
+                        <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                          <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>APP LOGS</div>
+                          <div style={{fontWeight: 700, fontSize: 16}}>{observability.channels?.application_logs?.events_seen || 0}</div>
+                        </div>
+                        <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                          <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>AUTH LOGS</div>
+                          <div style={{fontWeight: 700, fontSize: 16}}>{observability.channels?.authentication_logs?.events_seen || 0}</div>
+                        </div>
+                        <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                          <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>NETWORK LOGS</div>
+                          <div style={{fontWeight: 700, fontSize: 16}}>{observability.channels?.network_logs?.events_seen || 0}</div>
+                        </div>
+                        <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                          <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>FAILED AUTH SIGNALS</div>
+                          <div style={{fontWeight: 700, fontSize: 16}}>{observability.metrics?.failed_auth_events || 0}</div>
+                        </div>
+                      </div>
+                      <div style={{display: 'grid', gap: 12}}>
+                        {(observability.recent_spans || []).slice(0, 6).map((span, index) => (
+                          <div key={`${span.name}-${index}`} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div className="flex-between" style={{marginBottom: 6}}>
+                              <span style={{fontWeight: 600, fontSize: 13}}>{span.name}</span>
+                              <span style={{fontSize: 12, color: 'var(--text-subtle)'}}>{span.duration_ms} ms</span>
+                            </div>
+                            <div style={{fontSize: 12, color: 'var(--text-muted)'}}>
+                              Agent: {span.attributes?.["cyberagent.owner_agent"] || "Collector"} • Stage: {span.attributes?.["cyberagent.stage_after"] || span.attributes?.["cyberagent.channels"] || "ingest"}
+                            </div>
+                          </div>
+                        ))}
+                        {!observability.recent_spans?.length ? (
+                          <div style={{color: 'var(--text-muted)', fontSize: 13}}>OpenTelemetry spans will appear here as soon as the collector or agents run.</div>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div className="card">
+                      <div className="card-title" style={{marginBottom: 16}}>Detection Highlights</div>
+                      <div style={{display: 'grid', gap: 12}}>
+                        {(observability.recent_alerts || []).slice(0, 6).map((alert, index) => (
+                          <div key={`${alert.timestamp}-${index}`} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div className="flex-between" style={{marginBottom: 6}}>
+                              <span style={{fontWeight: 600, fontSize: 13}}>{alert.agent}</span>
+                              <span className={`status-pill badge-${alert.severity === 'CRITICAL' ? 'red' : 'amber'}`}>{alert.severity}</span>
+                            </div>
+                            <div style={{fontSize: 13, color: 'var(--text-muted)', marginBottom: 6}}>{alert.message}</div>
+                            <div style={{fontSize: 12, color: 'var(--text-subtle)'}}>Incident: {alert.attack_id || 'n/a'} • Tool: {alert.tool}</div>
+                          </div>
+                        ))}
+                        {!observability.recent_alerts?.length ? (
+                          <div style={{color: 'var(--text-muted)', fontSize: 13}}>
+                            Normal telemetry is flowing. When repeated failed logins or recon starts, the detection agent will flag it here.
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -863,52 +954,85 @@ Body: {
                     <div className="card-title" style={{marginBottom: 16}}>Agent Protocol Surface</div>
                     <div className="grid-layout">
                       <div style={integrationPanelStyle}>
-                        <div style={eyebrowStyle}>A2A Discovery</div>
+                        <div style={eyebrowStyle}>MCP Discovery</div>
                         <div style={{display: 'grid', gap: 12}}>
                           <div>
-                            <div style={{fontSize: 12, color: 'var(--text-subtle)', marginBottom: 4}}>Agent Registry</div>
-                            <div style={tokenStyle}>{integration?.protocols?.a2a_registry_url || `${API_BASE}/a2a/agents`}</div>
+                            <div style={{fontSize: 12, color: 'var(--text-subtle)', marginBottom: 4}}>MCP Endpoint</div>
+                            <div style={tokenStyle}>{integration?.protocols?.mcp_endpoint || `${API_BASE}/mcp`}</div>
                           </div>
                           <div>
-                            <div style={{fontSize: 12, color: 'var(--text-subtle)', marginBottom: 4}}>Root Agent Card</div>
-                            <div style={tokenStyle}>{integration?.protocols?.a2a_root_agent_card || `${API_BASE}/a2a/soc_coordinator/agent-card.json`}</div>
+                            <div style={{fontSize: 12, color: 'var(--text-subtle)', marginBottom: 4}}>Tool Registry</div>
+                            <div style={tokenStyle}>{integration?.protocols?.mcp_tools_url || `${API_BASE}/mcp/tools`}</div>
                           </div>
                           <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6}}>
-                            The SOC coordinator exposes named agents for normalization, detection, correlation, classification,
-                            investigation, response planning, policy, action, and reporting through A2A-style invoke contracts.
+                            The platform now uses an MCP-style tool registry as its primary runtime. Multi-agent execution is performed
+                            by specialist agents that explicitly call telemetry, analysis, and response tools.
                           </div>
                           <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6}}>
-                            Stage 2 runtime: {integration?.protocols?.stage2?.enabled ? 'Google ADK native reasoning enabled.' : 'Stage 2 runtime unavailable.'}
+                            Active runtime: {integration?.protocols?.primary_runtime || 'mcp_tools'}.
                           </div>
                         </div>
                       </div>
                       <div style={codePanelStyle}>
-                        <div style={eyebrowStyle}>AG-UI Run Endpoint</div>
-                        <pre style={codeBlockStyle}>{`POST ${integration?.protocols?.agui_run_url || `${API_BASE}/agui/runs`}
+                        <div style={eyebrowStyle}>MCP Tool Call Example</div>
+                        <pre style={codeBlockStyle}>{`POST ${integration?.protocols?.mcp_endpoint || `${API_BASE}/mcp`}
 Body: {
-  "incident_id": "<incident-id>",
-  "thread_id": "cyberagent-soc-thread"
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "analysis.classify_threat",
+    "arguments": {
+      "state": { ... }
+    }
+  }
 }
+`}</pre>
+                      </div>
+                    </div>
+                  </div>
 
-Streams:
-- RUN_STARTED
-- STATE_SNAPSHOT / STATE_DELTA
-- TOOL_CALL_START / TOOL_CALL_RESULT
-- TEXT_MESSAGE_CONTENT
-- RUN_FINISHED`}</pre>
+                  <div className="card" style={{marginBottom: 24}}>
+                    <div className="card-title" style={{marginBottom: 16}}>OpenTelemetry Observability</div>
+                    <div className="grid-layout">
+                      <div style={integrationPanelStyle}>
+                        <div style={eyebrowStyle}>Runtime</div>
+                        <div style={{display: 'grid', gap: 12}}>
+                          <div>
+                            <div style={{fontSize: 12, color: 'var(--text-subtle)', marginBottom: 4}}>Observability Endpoint</div>
+                            <div style={tokenStyle}>{integration?.protocols?.observability_url || `${API_BASE}/websites/${selectedWebsiteId}/observability`}</div>
+                          </div>
+                          <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6}}>
+                            OpenTelemetry is now recording collector ingests and every MCP tool stage. That means the dashboard can show
+                            live application logs, authentication logs, network logs, and the exact detection-agent chain after suspicious activity.
+                          </div>
+                          <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6}}>
+                            Collection mode: {integration?.protocols?.opentelemetry?.collection_mode || 'custom_security_events_plus_opentelemetry'}.
+                          </div>
+                        </div>
+                      </div>
+                      <div style={codePanelStyle}>
+                        <div style={eyebrowStyle}>Recent OTel Snapshot</div>
+                        <pre style={codeBlockStyle}>{JSON.stringify({
+                          enabled: observability.enabled,
+                          failed_auth_events: observability.metrics?.failed_auth_events || 0,
+                          tool_executions: observability.metrics?.tool_executions || 0,
+                          latest_tool: observability.latest_tool?.tool_name || null,
+                          recent_span: observability.recent_spans?.[0]?.name || null,
+                        }, null, 2)}</pre>
                       </div>
                     </div>
                   </div>
 
                   {integration?.protocols?.stage2?.a2a_agents?.length ? (
                     <div className="card" style={{marginBottom: 24}}>
-                      <div className="card-title" style={{marginBottom: 16}}>Stage 2 ADK Agents</div>
+                      <div className="card-title" style={{marginBottom: 16}}>Optional ADK Agents</div>
                       <div style={{display: 'grid', gap: 12}}>
                         {integration.protocols.stage2.a2a_agents.map((agent) => (
                           <div key={agent.name} style={traceCardStyle}>
                             <div className="flex-between" style={{marginBottom: 8}}>
                               <span style={{fontWeight: 600, fontSize: 13}}>{agent.name}</span>
-                              <span style={{fontSize: 12, color: 'var(--color-gold)'}}>ADK + A2A</span>
+                              <span style={{fontSize: 12, color: 'var(--color-gold)'}}>Optional</span>
                             </div>
                             <div style={{fontSize: 13, color: 'var(--text-muted)', marginBottom: 8}}>{agent.description}</div>
                             <div style={tokenStyle}>{agent.agent_card_url || agent.base_url}</div>
@@ -998,7 +1122,7 @@ Streams:
                           </div>
                           <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
                             <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>CLASSIFIER RUNTIME</div>
-                            <div style={{fontWeight: 600, fontSize: 13}}>{selectedIncident.llm_usage?.["Threat Classification Agent"]?.runtime || '—'}</div>
+                            <div style={{fontWeight: 600, fontSize: 13}}>{selectedIncident.runtime_metadata?.active_runtime || selectedIncident.llm_usage?.["Threat Classification Agent"]?.runtime || '—'}</div>
                           </div>
                         </div>
 
@@ -1040,6 +1164,25 @@ Streams:
                                   </div>
                                   <div style={{fontSize: 12, color: 'var(--text-subtle)', lineHeight: 1.6}}>
                                     Stage: {entry.output_summary?.current_stage || "n/a"} • Approval: {entry.output_summary?.approval_status || "n/a"}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </>
+                        ) : null}
+
+                        {(selectedIncident.tool_trace || []).length ? (
+                          <>
+                            <div className="card-title" style={{marginTop: 24, marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>MCP TOOL TRACE</div>
+                            <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
+                              {(selectedIncident.tool_trace || []).map((entry, idx) => (
+                                <div key={idx} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                                  <div className="flex-between" style={{marginBottom: 8}}>
+                                    <span style={{fontWeight: 600, fontSize: 13}}>{entry.agent}</span>
+                                    <span style={{fontSize: 12, color: 'var(--text-subtle)'}}>{entry.tool}</span>
+                                  </div>
+                                  <div style={{fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6}}>
+                                    Output stage: {entry.output_summary?.current_stage || 'n/a'} • Approval: {entry.output_summary?.approval_status || 'n/a'}
                                   </div>
                                 </div>
                               ))}

@@ -6,6 +6,10 @@ const collectorTokenInput = document.getElementById("collectorToken");
 const sourceLabelInput = document.getElementById("sourceLabel");
 const collectorStatus = document.getElementById("collectorStatus");
 const activityLog = document.getElementById("activityLog");
+const HEARTBEAT_INTERVAL_MS = 8000;
+
+let heartbeatTimer = null;
+let syncInFlight = false;
 
 function isoNow() {
   return new Date().toISOString();
@@ -71,6 +75,7 @@ function persistConfig() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(getConfig()));
   setStatus("Store connection settings saved locally.");
   addLogEntry("Settings updated", "NovaCart saved the operations endpoint, connection key, and environment label.");
+  startHeartbeat();
 }
 
 function loadConfig() {
@@ -84,6 +89,9 @@ function loadConfig() {
     collectorTokenInput.value = config.collectorToken || "";
     sourceLabelInput.value = config.sourceLabel || sourceLabelInput.value;
     setStatus(config.collectorToken ? "Store connection loaded. Activity sync is ready." : "Paste your store connection key to begin.");
+    if (config.collectorToken && config.apiBase) {
+      startHeartbeat();
+    }
   } catch (_error) {
     setStatus("Could not load saved store settings.");
   }
@@ -116,13 +124,20 @@ function ensureConfigured() {
   return config;
 }
 
-async function sendScenario(title, payloadDescription, payload) {
+async function sendScenario(title, payloadDescription, payload, options = {}) {
   const config = ensureConfigured();
   if (!config) {
     return;
   }
 
-  setStatus("Syncing store activity...", "warn");
+  if (options.background && syncInFlight) {
+    return;
+  }
+
+  syncInFlight = true;
+  if (!options.silent) {
+    setStatus("Syncing store activity...", "warn");
+  }
   try {
     const response = await fetch(`${config.apiBase}/collector/ingest`, {
       method: "POST",
@@ -142,12 +157,45 @@ async function sendScenario(title, payloadDescription, payload) {
     }
 
     const suffix = data.attack_id ? ` Incident id: ${data.attack_id}.` : "";
-    setStatus(`Store activity synced successfully.${suffix}`, "success");
-    addLogEntry(title, `${payloadDescription} ${data.events_ingested} activity event(s) were synced successfully.${suffix}`);
+    setStatus(
+      options.background ? "Background telemetry sync is active." : `Store activity synced successfully.${suffix}`,
+      "success"
+    );
+    if (!options.silent) {
+      addLogEntry(title, `${payloadDescription} ${data.events_ingested} activity event(s) were synced successfully.${suffix}`);
+    }
   } catch (error) {
-    setStatus("Failed to sync store activity.", "error");
-    addLogEntry(title, `Sync failed: ${error.message}`);
+    setStatus(options.background ? "Background telemetry sync failed." : "Failed to sync store activity.", "error");
+    if (!options.silent) {
+      addLogEntry(title, `Sync failed: ${error.message}`);
+    }
+  } finally {
+    syncInFlight = false;
   }
+}
+
+function stopHeartbeat() {
+  if (heartbeatTimer) {
+    window.clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+}
+
+function startHeartbeat() {
+  const config = getConfig();
+  stopHeartbeat();
+  if (!config.apiBase || !config.collectorToken) {
+    return;
+  }
+  addLogEntry("Live monitoring connected", "NovaCart is now sending background application, authentication, and network telemetry every few seconds.");
+  heartbeatTimer = window.setInterval(() => {
+    sendScenario(
+      "Background telemetry",
+      "NovaCart sent a periodic heartbeat of healthy customer activity.",
+      healthyTrafficPayload(),
+      { silent: true, background: true }
+    );
+  }, HEARTBEAT_INTERVAL_MS);
 }
 
 function healthyTrafficPayload() {
@@ -283,3 +331,5 @@ loadConfig();
 if (!activityLog.children.length) {
   activityLog.innerHTML = '<div class="activity-empty">No store activity has been synced yet.</div>';
 }
+
+window.addEventListener("beforeunload", stopHeartbeat);

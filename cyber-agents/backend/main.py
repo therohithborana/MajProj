@@ -8,8 +8,9 @@ from bson import ObjectId
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from pymongo.errors import OperationFailure
 
-from adk_stage2 import get_stage2_a2a_apps, get_stage2_agent_card, get_stage2_runtime_summary, run_stage2_review
+from adk_stage2 import get_stage2_a2a_apps, get_stage2_agent_card, get_stage2_runtime_summary
 from agent_protocols import (
     AGUI_CONTENT_TYPE,
     SocA2ACoordinator,
@@ -18,7 +19,9 @@ from agent_protocols import (
 )
 from auth import require_collector, require_user
 from db import db, init_db
+from mcp_tools import McpMultiAgentCoordinator
 from models import AGUIRunRequest, A2AInvokeRequest, ApprovalRequest, CollectorIngestRequest, Stage2InvokeRequest, serialize_document, utc_now
+from otel_runtime import otel_runtime
 from red_team import simulate_attack
 from routes.auth import router as auth_router
 from routes.websites import router as websites_router
@@ -46,6 +49,7 @@ attack_running = False
 auto_task = None
 auto_website_id = None
 coordinator = SocA2ACoordinator()
+mcp_coordinator = McpMultiAgentCoordinator()
 
 STAGE_MESSAGES = {
     "normalization": "Normalization Agent converted raw collector telemetry into a shared event schema.",
@@ -100,6 +104,7 @@ def _persist_incident(website_id: str, state: dict):
         "agent_trace": state.get("agent_trace", []),
         "agent_messages": state.get("agent_messages", []),
         "protocol_trace": state.get("protocol_trace", []),
+        "tool_trace": state.get("tool_trace", []),
         "runtime_metadata": state.get("runtime_metadata", {}),
         "llm_usage": state.get("llm_usage", {}),
         "created_at": now,
@@ -218,6 +223,10 @@ def _telemetry_snapshot(website_id: str):
     }
 
 
+def _observability_snapshot(website_id: str):
+    return otel_runtime.snapshot(website_id)
+
+
 async def _broadcast_trace(website_id: str, attack_id: str, state: dict):
     protocol_lookup = {
         item.get("to_agent"): item for item in state.get("protocol_trace", []) if item.get("to_agent")
@@ -283,7 +292,7 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
     )
 
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, coordinator.run_detection_pipeline, initial_state)
+    result = await loop.run_in_executor(None, mcp_coordinator.run_detection_pipeline, initial_state)
     result["website_id"] = website["_id"]
     result.setdefault("runtime_metadata", {})["stage2"] = get_stage2_runtime_summary()
 
@@ -291,6 +300,15 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
 
     active_incidents[attack_id] = result
     _persist_incident(website["_id"], result)
+    await broadcast(
+        "observability_update",
+        {
+            "website_id": website["_id"],
+            "attack_id": attack_id,
+            "observability": _observability_snapshot(website["_id"]),
+            "message": "OpenTelemetry captured the latest multi-agent execution spans.",
+        },
+    )
 
     if result.get("policy_decision", {}).get("mode") == "auto_execute":
         await broadcast(
@@ -301,17 +319,28 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
                 "current_stage": "action",
                 "message": "Policy Agent auto-approved the response path. Action Agent is executing it now.",
                 "policy_decision": result.get("policy_decision"),
+                "tool_trace": result.get("tool_trace"),
+                "runtime_metadata": result.get("runtime_metadata", {}),
             },
         )
         final_state = await loop.run_in_executor(
             None,
-            coordinator.run_resolution_pipeline,
+            mcp_coordinator.run_resolution_pipeline,
             {**result, "approval_status": "auto_approved"},
         )
         final_state["website_id"] = website["_id"]
         final_state.setdefault("runtime_metadata", {})["stage2"] = get_stage2_runtime_summary()
         active_incidents[attack_id] = final_state
         _persist_incident(website["_id"], final_state)
+        await broadcast(
+            "observability_update",
+            {
+                "website_id": website["_id"],
+                "attack_id": attack_id,
+                "observability": _observability_snapshot(website["_id"]),
+                "message": "OpenTelemetry recorded the autonomous response path.",
+            },
+        )
         await broadcast(
             "incident_resolved",
             {
@@ -325,6 +354,7 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
                 "agent_trace": final_state.get("agent_trace"),
                 "agent_messages": final_state.get("agent_messages"),
                 "protocol_trace": final_state.get("protocol_trace"),
+                "tool_trace": final_state.get("tool_trace"),
                 "runtime_metadata": final_state.get("runtime_metadata", {}),
                 "llm_usage": final_state.get("llm_usage"),
                 "message": "Autonomous response completed and the incident report is ready.",
@@ -340,19 +370,29 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
                 "message": "Policy Agent requires human approval before containment is executed.",
                 "policy_decision": result.get("policy_decision"),
                 "protocol_trace": result.get("protocol_trace"),
+                "tool_trace": result.get("tool_trace"),
                 "runtime_metadata": result.get("runtime_metadata", {}),
             },
         )
     else:
         final_state = await loop.run_in_executor(
             None,
-            coordinator.run_resolution_pipeline,
+            mcp_coordinator.run_resolution_pipeline,
             {**result, "approval_status": "manual_required"},
         )
         final_state["website_id"] = website["_id"]
         final_state.setdefault("runtime_metadata", {})["stage2"] = get_stage2_runtime_summary()
         active_incidents[attack_id] = final_state
         _persist_incident(website["_id"], final_state)
+        await broadcast(
+            "observability_update",
+            {
+                "website_id": website["_id"],
+                "attack_id": attack_id,
+                "observability": _observability_snapshot(website["_id"]),
+                "message": "OpenTelemetry recorded the escalation and reporting path.",
+            },
+        )
         await broadcast(
             "incident_resolved",
             {
@@ -366,6 +406,7 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
                 "agent_trace": final_state.get("agent_trace"),
                 "agent_messages": final_state.get("agent_messages"),
                 "protocol_trace": final_state.get("protocol_trace"),
+                "tool_trace": final_state.get("tool_trace"),
                 "runtime_metadata": final_state.get("runtime_metadata", {}),
                 "llm_usage": final_state.get("llm_usage"),
                 "message": "Incident was escalated for manual follow-up with a completed AI report.",
@@ -400,7 +441,30 @@ async def _auto_simulation_loop(website: dict):
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     connected_clients.append(websocket)
-    incidents = [serialize_document(document) for document in db.incidents.find({}).sort("created_at", -1)]
+    try:
+        cursor = db.incidents.find(
+            {},
+            {
+                "website_id": 1,
+                "attack_id": 1,
+                "incident_id": 1,
+                "current_stage": 1,
+                "simulation": 1,
+                "classification": 1,
+                "investigation": 1,
+                "policy_decision": 1,
+                "approval_status": 1,
+                "action_result": 1,
+                "incident_report": 1,
+                "runtime_metadata": 1,
+                "llm_usage": 1,
+                "created_at": 1,
+                "updated_at": 1,
+            },
+        ).sort("created_at", -1).limit(50)
+        incidents = [serialize_document(document) for document in cursor]
+    except OperationFailure:
+        incidents = []
     await websocket.send_json(
         {
             "type": "init",
@@ -424,8 +488,11 @@ async def websocket_endpoint(websocket: WebSocket):
 @app.post("/collector/ingest")
 async def ingest_collector_events(payload: CollectorIngestRequest, website=Depends(require_collector)):
     attack_id = payload.attack_id or (uuid.uuid4().hex[:8].upper() if payload.run_detection else None)
-    normalized_events = _store_events(website, attack_id, [event.model_dump() for event in payload.events])
+    raw_events = [event.model_dump() for event in payload.events]
+    normalized_events = _store_events(website, attack_id, raw_events)
+    otel_runtime.record_collector_ingest(website["_id"], payload.source_label, raw_events, payload.run_detection)
     telemetry_snapshot = _telemetry_snapshot(website["_id"])
+    observability_snapshot = _observability_snapshot(website["_id"])
     await broadcast(
         "telemetry_update",
         {
@@ -435,8 +502,18 @@ async def ingest_collector_events(payload: CollectorIngestRequest, website=Depen
             "source_label": payload.source_label,
             "run_detection": payload.run_detection,
             "telemetry": telemetry_snapshot,
+            "observability": observability_snapshot,
             "recent_events": telemetry_snapshot["recent_events"][: min(4, len(telemetry_snapshot["recent_events"]))],
             "message": f"Collector received {len(normalized_events)} event(s) from {payload.source_label or 'customer website'}.",
+        },
+    )
+    await broadcast(
+        "observability_update",
+        {
+            "website_id": website["_id"],
+            "attack_id": attack_id,
+            "observability": observability_snapshot,
+            "message": "OpenTelemetry captured a fresh collector ingest burst.",
         },
     )
     if payload.run_detection and attack_id:
@@ -485,6 +562,12 @@ async def website_telemetry(website_id: str, user=Depends(require_user)):
     return _telemetry_snapshot(website_id)
 
 
+@app.get("/websites/{website_id}/observability")
+async def website_observability(website_id: str, user=Depends(require_user)):
+    _get_website_or_404(user["_id"], website_id)
+    return _observability_snapshot(website_id)
+
+
 @app.get("/incidents/{incident_id}")
 async def get_incident(incident_id: str, user=Depends(require_user)):
     incident = db.incidents.find_one({"attack_id": incident_id})
@@ -499,6 +582,63 @@ async def get_incident(incident_id: str, user=Depends(require_user)):
 @app.get("/stage2/runtime")
 async def stage2_runtime():
     return get_stage2_runtime_summary("http://localhost:8000")
+
+
+@app.get("/mcp/tools")
+async def mcp_tools_list():
+    return {
+        "tools": mcp_coordinator.runtime.list_tools(),
+        "runtime": mcp_coordinator.runtime_metadata(),
+    }
+
+
+@app.post("/mcp")
+async def mcp_endpoint(payload: dict):
+    method = payload.get("method")
+    request_id = payload.get("id")
+
+    if method == "initialize":
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {
+                "protocolVersion": "2025-11-25",
+                "serverInfo": {
+                    "name": "cyberagent-mcp",
+                    "version": "0.2.0",
+                },
+                "capabilities": {
+                    "tools": {
+                        "listChanged": False,
+                    }
+                },
+            },
+        }
+
+    if method == "tools/list":
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {
+                "tools": mcp_coordinator.runtime.list_tools(),
+            },
+        }
+
+    if method == "tools/call":
+        params = payload.get("params") or {}
+        tool_name = params.get("name")
+        arguments = params.get("arguments") or {}
+        try:
+            result = mcp_coordinator.runtime.call_tool(tool_name, arguments)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Tool not found")
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": result,
+        }
+
+    raise HTTPException(status_code=400, detail="Unsupported MCP method")
 
 
 @app.get("/stage2/a2a/{agent_name}/.well-known/agent-card.json")
@@ -539,6 +679,7 @@ async def list_a2a_agents():
         "root_agent": coordinator.root_card(base_url),
         "agents": coordinator.agent_cards(base_url),
         "stage2": get_stage2_runtime_summary(base_url),
+        "mcp": mcp_coordinator.runtime_metadata(),
     }
 
 
@@ -630,6 +771,7 @@ async def approve_incident(incident_id: str, body: ApprovalRequest, user=Depends
         "agent_trace": incident.get("agent_trace", []),
         "agent_messages": incident.get("agent_messages", []),
         "protocol_trace": incident.get("protocol_trace", []),
+        "tool_trace": incident.get("tool_trace", []),
         "runtime_metadata": incident.get("runtime_metadata", {}),
         "llm_usage": incident.get("llm_usage", {}),
         "current_stage": incident.get("current_stage"),
@@ -644,11 +786,13 @@ async def approve_incident(incident_id: str, body: ApprovalRequest, user=Depends
             "approval_status": body.decision,
             "current_stage": "action",
             "message": "Human approval received. Action Agent is applying the selected response path.",
+            "tool_trace": state.get("tool_trace"),
+            "runtime_metadata": state.get("runtime_metadata", {}),
         },
     )
 
     loop = asyncio.get_event_loop()
-    final_state = await loop.run_in_executor(None, coordinator.run_resolution_pipeline, state)
+    final_state = await loop.run_in_executor(None, mcp_coordinator.run_resolution_pipeline, state)
     final_state["website_id"] = incident["website_id"]
     final_state.setdefault("runtime_metadata", {})["stage2"] = get_stage2_runtime_summary()
     active_incidents[incident_id] = final_state
@@ -667,6 +811,7 @@ async def approve_incident(incident_id: str, body: ApprovalRequest, user=Depends
             "agent_trace": final_state.get("agent_trace"),
             "agent_messages": final_state.get("agent_messages"),
             "protocol_trace": final_state.get("protocol_trace"),
+            "tool_trace": final_state.get("tool_trace"),
             "runtime_metadata": final_state.get("runtime_metadata", {}),
             "llm_usage": final_state.get("llm_usage"),
             "message": "Reporting Agent generated the incident report.",
