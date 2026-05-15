@@ -7,20 +7,12 @@ import uuid
 from bson import ObjectId
 from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
 from pymongo.errors import OperationFailure
 
-from adk_stage2 import get_stage2_a2a_apps, get_stage2_agent_card, get_stage2_runtime_summary
-from agent_protocols import (
-    AGUI_CONTENT_TYPE,
-    SocA2ACoordinator,
-    agui_sse,
-    build_agui_event_stream,
-)
 from auth import require_collector, require_user
 from db import db, init_db
 from mcp_tools import McpMultiAgentCoordinator
-from models import AGUIRunRequest, A2AInvokeRequest, ApprovalRequest, CollectorIngestRequest, IncidentAssignRequest, IncidentNoteRequest, Stage2InvokeRequest, serialize_document, utc_now
+from models import ApprovalRequest, CollectorIngestRequest, IncidentAssignRequest, IncidentNoteRequest, serialize_document, utc_now
 from otel_runtime import otel_runtime
 from red_team import simulate_attack
 from routes.auth import router as auth_router
@@ -40,15 +32,12 @@ init_db()
 
 app.include_router(auth_router)
 app.include_router(websites_router)
-for mount_path, mounted_app in get_stage2_a2a_apps().items():
-    app.mount(mount_path, mounted_app)
 
 active_incidents = {}
 connected_clients = []
 attack_running = False
 auto_task = None
 auto_website_id = None
-coordinator = SocA2ACoordinator()
 mcp_coordinator = McpMultiAgentCoordinator()
 
 STAGE_MESSAGES = {
@@ -266,23 +255,8 @@ def _observability_snapshot(website_id: str):
 
 
 async def _broadcast_trace(website_id: str, attack_id: str, state: dict):
-    protocol_lookup = {
-        item.get("to_agent"): item for item in state.get("protocol_trace", []) if item.get("to_agent")
-    }
-    stage_to_protocol_agent = {
-        "normalization": "normalization_agent",
-        "detection": "detection_agent",
-        "correlation": "correlation_agent",
-        "classification": "classification_agent",
-        "investigation": "investigation_agent",
-        "response_planning": "response_planning_agent",
-        "policy_decision": "policy_agent",
-        "action": "action_agent",
-        "report": "reporting_agent",
-    }
     discussion_entries = state.get("agent_discussion", [])
     for index, entry in enumerate(state.get("agent_trace", [])):
-        public_name = stage_to_protocol_agent.get(entry["stage"])
         discussion_entry = discussion_entries[index] if index < len(discussion_entries) else None
         await broadcast(
             "agent_update",
@@ -294,7 +268,6 @@ async def _broadcast_trace(website_id: str, attack_id: str, state: dict):
                 "agent_trace_entry": entry,
                 "agent_discussion_entry": discussion_entry,
                 "agent_discussion": discussion_entries[: index + 1] if discussion_entry else discussion_entries,
-                "protocol_trace_entry": protocol_lookup.get(public_name),
                 "policy_decision": state.get("policy_decision"),
                 "runtime_metadata": state.get("runtime_metadata", {}),
             },
@@ -356,7 +329,6 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
         )
         raise
     result["website_id"] = website["_id"]
-    result.setdefault("runtime_metadata", {})["stage2"] = get_stage2_runtime_summary()
     if job_id:
         result.setdefault("runtime_metadata", {})["job_id"] = job_id
 
@@ -435,7 +407,6 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
             )
             raise
         final_state["website_id"] = website["_id"]
-        final_state.setdefault("runtime_metadata", {})["stage2"] = get_stage2_runtime_summary()
         active_incidents[attack_id] = final_state
         _persist_incident(website["_id"], final_state)
         await broadcast(
@@ -506,7 +477,6 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
             )
             raise
         final_state["website_id"] = website["_id"]
-        final_state.setdefault("runtime_metadata", {})["stage2"] = get_stage2_runtime_summary()
         active_incidents[attack_id] = final_state
         _persist_incident(website["_id"], final_state)
         await broadcast(
@@ -841,11 +811,6 @@ async def assign_incident(incident_id: str, body: IncidentAssignRequest, user=De
     return serialize_document(db.incidents.find_one({"attack_id": incident_id}))
 
 
-@app.get("/stage2/runtime")
-async def stage2_runtime():
-    return get_stage2_runtime_summary("http://localhost:8000")
-
-
 @app.get("/mcp/tools")
 async def mcp_tools_list():
     return {
@@ -901,109 +866,6 @@ async def mcp_endpoint(payload: dict):
         }
 
     raise HTTPException(status_code=400, detail="Unsupported MCP method")
-
-
-@app.get("/stage2/a2a/{agent_name}/.well-known/agent-card.json")
-async def stage2_agent_card(agent_name: str):
-    card = get_stage2_agent_card(agent_name, "http://localhost:8000")
-    if not card:
-        raise HTTPException(status_code=404, detail="Stage 2 agent not found")
-    return card
-
-
-@app.post("/stage2/a2a/{agent_name}/invoke")
-async def stage2_agent_invoke(agent_name: str, payload: Stage2InvokeRequest):
-    agent_key = None
-    if agent_name == "classification_agent":
-        agent_key = "classification"
-    elif agent_name == "investigation_agent":
-        agent_key = "investigation"
-    elif agent_name == "policy_agent":
-        agent_key = "policy"
-    if not agent_key:
-        raise HTTPException(status_code=404, detail="Stage 2 agent not found")
-
-    prompt = payload.prompt or json.dumps(payload.payload, ensure_ascii=False)
-    result = run_stage2_review(agent_key, prompt)
-    if result is None:
-        raise HTTPException(status_code=503, detail="Stage 2 agent runtime unavailable")
-    return {
-        "agent": agent_name,
-        "runtime": "google-adk",
-        "result": result,
-    }
-
-
-@app.get("/a2a/agents")
-async def list_a2a_agents():
-    base_url = "http://localhost:8000"
-    return {
-        "root_agent": coordinator.root_card(base_url),
-        "agents": coordinator.agent_cards(base_url),
-        "stage2": get_stage2_runtime_summary(base_url),
-        "mcp": mcp_coordinator.runtime_metadata(),
-    }
-
-
-@app.get("/a2a/soc_coordinator/agent-card.json")
-async def get_root_agent_card():
-    return coordinator.root_card("http://localhost:8000")
-
-
-@app.get("/a2a/agents/{agent_name}/agent-card.json")
-async def get_agent_card(agent_name: str):
-    cards = {card["name"]: card for card in coordinator.agent_cards("http://localhost:8000")}
-    card = cards.get(agent_name)
-    if not card:
-        raise HTTPException(status_code=404, detail="Agent card not found")
-    return card
-
-
-@app.post("/a2a/agents/{agent_name}/invoke")
-async def invoke_a2a_agent(agent_name: str, payload: A2AInvokeRequest):
-    if agent_name not in {card["name"] for card in coordinator.agent_cards("http://localhost:8000")}:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    state = coordinator.invoke_agent(agent_name, payload.state, payload.caller)
-    trace_entry = state.get("protocol_trace", [])[-1] if state.get("protocol_trace") else None
-    return {
-        "task_id": payload.task_id or (trace_entry or {}).get("task_id"),
-        "agent": agent_name,
-        "runtime": state.get("runtime_metadata", {}),
-        "protocol_trace_entry": trace_entry,
-        "state": serialize_document(state),
-    }
-
-
-@app.post("/a2a/soc_coordinator/run")
-async def run_root_coordinator(payload: A2AInvokeRequest):
-    state = coordinator.run_detection_pipeline(payload.state)
-    return {
-        "task_id": payload.task_id or uuid.uuid4().hex,
-        "agent": "soc_coordinator",
-        "runtime": state.get("runtime_metadata", {}),
-        "state": serialize_document(state),
-    }
-
-
-@app.post("/agui/runs")
-async def agui_run(payload: AGUIRunRequest, user=Depends(require_user)):
-    incident = db.incidents.find_one({"attack_id": payload.incident_id})
-    if not incident:
-        raise HTTPException(status_code=404, detail="Incident not found")
-    website = db.websites.find_one(_website_query(user["_id"], incident["website_id"]))
-    if not website:
-        raise HTTPException(status_code=404, detail="Incident not found")
-
-    serialized_incident = serialize_document(incident)
-    run_id = payload.run_id or uuid.uuid4().hex
-    events = build_agui_event_stream(serialized_incident, payload.thread_id, run_id)
-
-    async def event_generator():
-        for event in events:
-            yield agui_sse(event)
-            await asyncio.sleep(0.05)
-
-    return StreamingResponse(event_generator(), media_type=AGUI_CONTENT_TYPE)
 
 
 @app.post("/incidents/{incident_id}/approve")
@@ -1082,7 +944,6 @@ async def approve_incident(incident_id: str, body: ApprovalRequest, user=Depends
         )
         raise
     final_state["website_id"] = incident["website_id"]
-    final_state.setdefault("runtime_metadata", {})["stage2"] = get_stage2_runtime_summary()
     active_incidents[incident_id] = final_state
     _persist_incident(incident["website_id"], final_state)
     await broadcast(

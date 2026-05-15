@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { LayoutDashboard, ShieldAlert, Activity, Settings, Bell, Search, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { LayoutDashboard, ShieldAlert, Activity, Settings, Bell, Search, PanelLeftClose, PanelLeftOpen, FileText } from "lucide-react";
 
 const API_BASE = "http://localhost:8000";
 const WS_URL = "ws://localhost:8000/ws";
@@ -918,6 +918,10 @@ function App() {
             <ShieldAlert className="nav-item-icon" size={20} />
             {!sidebarCollapsed && <span>Threat Detection</span>}
           </button>
+          <button className={`nav-item ${currentTab === 'reports' ? 'active' : ''}`} onClick={() => setCurrentTab('reports')}>
+            <FileText className="nav-item-icon" size={20} />
+            {!sidebarCollapsed && <span>Reports</span>}
+          </button>
         </div>
         <div className="sidebar-footer">
           <button className="nav-item" onClick={() => setCurrentTab('telemetry')}>
@@ -1351,6 +1355,58 @@ function App() {
                 </div>
               )}
 
+              {currentTab === 'reports' && (
+                <div>
+                  <div className="flex-between" style={{marginBottom: 24}}>
+                    <div>
+                      <div className="card-title" style={{fontSize: 24}}>Reports</div>
+                      <div style={{color: 'var(--text-muted)'}}>Reporting Agent outputs, executive summaries, and completed case writeups.</div>
+                    </div>
+                  </div>
+
+                  <div className="grid-layout">
+                    <div className="card">
+                      <div className="card-title" style={{marginBottom: 16}}>Generated Reports</div>
+                      <div style={{display: 'grid', gap: 12}}>
+                        {reportIncidents.length ? reportIncidents.map((incident) => (
+                          <div key={incident.attack_id} style={{padding: 14, background: 'var(--bg-canvas)', borderRadius: 14, border: '1px solid var(--border-color)'}}>
+                            <div className="flex-between" style={{marginBottom: 8}}>
+                              <span style={{fontWeight: 700, fontSize: 13}}>{incident.incident_report?.report_id || incident.attack_id}</span>
+                              <span style={{fontSize: 12, color: 'var(--text-subtle)'}}>{incident.classification?.predicted_class || 'Incident'}</span>
+                            </div>
+                            <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.7, marginBottom: 10}}>
+                              {incident.incident_report?.executive_summary || 'Report pending.'}
+                            </div>
+                            <div style={{fontSize: 12, color: 'var(--text-subtle)', marginBottom: 10}}>
+                              Severity: {incident.classification?.attack?.severity || '—'} • Confidence: {incident.classification?.confidence ? `${Math.round(incident.classification.confidence * 100)}%` : '—'}
+                            </div>
+                            <button className="btn btn-secondary" style={{padding: '8px 12px'}} onClick={() => { setCurrentTab('incidents'); setSelectedIncidentId(incident.attack_id); setIncidentDetailTab('report'); }}>
+                              Open incident report
+                            </button>
+                          </div>
+                        )) : (
+                          <div style={{fontSize: 13, color: 'var(--text-muted)'}}>Reports will appear here once the reporting agent completes an incident workflow.</div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="card">
+                      <div className="card-title" style={{marginBottom: 16}}>Report Coverage</div>
+                      <div className="grid-metrics" style={{gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12}}>
+                        <div style={{background: 'var(--bg-canvas)', padding: 14, borderRadius: 12, border: '1px solid var(--border-color)'}}>
+                          <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>TOTAL REPORTS</div>
+                          <div style={{fontWeight: 700, fontSize: 20}}>{reportIncidents.length}</div>
+                        </div>
+                        <div style={{background: 'var(--bg-canvas)', padding: 14, borderRadius: 12, border: '1px solid var(--border-color)'}}>
+                          <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>PENDING WRITEUP</div>
+                          <div style={{fontWeight: 700, fontSize: 20}}>{websiteIncidents.filter((incident) => !incident.incident_report?.report_id).length}</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {currentTab === 'incidents' && (
                 <div className="grid-layout">
                   <div className="card" style={{padding: '16px 0'}}>
@@ -1607,21 +1663,18 @@ function App() {
                               </>
                             ) : null}
 
-                            {(selectedIncident.protocol_trace || []).length ? (
+                            {(selectedIncident.runtime_metadata?.planner_trace || []).length ? (
                               <>
-                                <div className="card-title" style={{marginTop: 24, marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>A2A INVOCATION TRACE</div>
+                                <div className="card-title" style={{marginTop: 24, marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>COORDINATOR PLAN</div>
                                 <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
-                                  {(selectedIncident.protocol_trace || []).map((entry, idx) => (
+                                  {(selectedIncident.runtime_metadata?.planner_trace || []).map((entry, idx) => (
                                     <div key={idx} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
                                       <div className="flex-between" style={{marginBottom: 8}}>
-                                        <span style={{fontWeight: 600, fontSize: 13}}>{entry.from_agent} → {entry.to_agent}</span>
-                                        <span style={{fontSize: 12, color: 'var(--text-subtle)'}}>{entry.protocol}</span>
+                                        <span style={{fontWeight: 600, fontSize: 13}}>{entry.phase} phase</span>
+                                        <span style={{fontSize: 12, color: 'var(--text-subtle)'}}>{entry.tool}</span>
                                       </div>
-                                      <div style={{fontSize: 13, color: 'var(--text-muted)', marginBottom: 8}}>
-                                        Runtime: {entry.runtime} • Task ID: {entry.task_id}
-                                      </div>
-                                      <div style={{fontSize: 12, color: 'var(--text-subtle)', lineHeight: 1.6}}>
-                                        Stage: {entry.output_summary?.current_stage || "n/a"} • Approval: {entry.output_summary?.approval_status || "n/a"}
+                                      <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6}}>
+                                        {entry.reason}
                                       </div>
                                     </div>
                                   ))}
@@ -1650,6 +1703,11 @@ function App() {
                                       {entry.prompt_profile?.purpose ? (
                                         <div style={{fontSize: 12, color: 'var(--text-subtle)', marginTop: 6}}>
                                           Purpose: {entry.prompt_profile.purpose}
+                                        </div>
+                                      ) : null}
+                                      {entry.planner_reason ? (
+                                        <div style={{fontSize: 12, color: 'var(--text-subtle)', marginTop: 6}}>
+                                          Coordinator: {entry.planner_reason}
                                         </div>
                                       ) : null}
                                     </div>

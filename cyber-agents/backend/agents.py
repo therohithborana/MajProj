@@ -203,18 +203,9 @@ def _normalize_scores(raw_scores, predicted_class):
 
 
 def _extract_ml_features(anomaly: dict, telemetry: dict) -> dict:
-    total_events = max(int(telemetry.get("total_events_observed") or 0), 1)
-    total_packets = int(anomaly.get("total_packets_observed") or 0)
-    total_bytes = int(anomaly.get("total_bytes_observed") or 0)
     return {
-        "request_burst": float(anomaly.get("request_burst") or 0),
-        "failed_auth_attempts": float(anomaly.get("failed_auth_attempts") or 0),
-        "port_span": float(anomaly.get("port_span") or 0),
-        "suspicious_path_hits": float(anomaly.get("suspicious_path_hits") or 0),
-        "unique_sources": float(len(anomaly.get("src_ips") or [])),
-        "packet_rate": round(total_packets / total_events, 4),
-        "bytes_rate": round(total_bytes / total_events, 4),
-        "syn_event_count": float(anomaly.get("syn_event_count") or 0),
+        "telemetry": telemetry,
+        "anomaly": anomaly,
     }
 
 
@@ -420,6 +411,49 @@ def detection(state: AgentState) -> AgentState:
         anomaly_type = "suspicious_path_recon"
         severity = "MEDIUM"
         summary = "Repeated access to sensitive paths indicates application reconnaissance."
+
+    llm_detection_prompt = f"""
+Detection review request:
+- Unique sources: {len(unique_src_ips)}
+- Primary source: {primary_src_ip}
+- Target: {dominant_target}:{target_port}
+- Failed auth attempts: {max_failed_auth}
+- Request burst: {request_burst}
+- Port span: {scan_span}
+- Suspicious path hits: {suspicious_path_hits}
+- Total packets: {packet_total}
+- Total bytes: {bytes_total}
+- SYN count: {syn_count}
+- Flagged paths: {flagged_paths[:8]}
+- Sample request paths: {list(request_paths.keys())[:8]}
+
+Return a JSON object with exactly this structure:
+{{
+  "anomaly_type": "short snake_case label",
+  "severity": "LOW/MEDIUM/HIGH/CRITICAL",
+  "summary": "one concise SOC summary sentence",
+  "candidate_labels": ["zero or more of DDoS, BruteForce, PortScan, SuspiciousRecon"]
+}}
+
+Rules:
+- be conservative
+- use only the labels listed above
+- if nothing stands out, candidate_labels can be an empty array
+- return JSON only
+""".strip()
+    try:
+        parsed = _llm_json(DETECTION_SYSTEM_PROMPT, llm_detection_prompt)
+        if isinstance(parsed, dict):
+            anomaly_type = str(parsed.get("anomaly_type") or anomaly_type).strip() or anomaly_type
+            severity = str(parsed.get("severity") or severity).upper()
+            summary = str(parsed.get("summary") or summary).strip() or summary
+            llm_candidates = [label for label in parsed.get("candidate_labels", []) if label in CLASS_LABELS]
+            candidate_labels = llm_candidates or candidate_labels
+            _mark_llm_usage(state, "Detection Agent", True, "direct_gemini")
+        else:
+            _mark_llm_usage(state, "Detection Agent", False)
+    except Exception:
+        _mark_llm_usage(state, "Detection Agent", False)
 
     state["anomaly"] = {
         "anomaly_type": anomaly_type,
@@ -1241,11 +1275,6 @@ Rules:
             "decision_source": decision_source,
         },
     )
-    policy_messages = {
-        "auto_execute": "The actions are reversible and low blast radius, so we can proceed automatically.",
-        "approval_required": "I don't want to execute this blindly on a customer-facing service, so human approval is required.",
-        "manual_escalation": "The evidence is too ambiguous for safe automation, so this needs manual escalation.",
-    }
     _speak(
         state,
         "Policy Agent",
@@ -1260,7 +1289,7 @@ Speak to the Action Agent after policy review.
 - Safety notes: {safety_notes}
 - Goal: explain the execution decision clearly
 """.strip(),
-        policy_messages.get(mode, reason),
+        reason,
         "decision",
     )
     return state

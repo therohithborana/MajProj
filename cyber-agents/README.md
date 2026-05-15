@@ -4,30 +4,28 @@ CyberAgent is a multi-agent cybersecurity SaaS prototype for startup web applica
 
 The project now includes:
 - `MCP tools` as the primary tool/runtime architecture
-- `A2A` for agent-to-agent invocation contracts
-- `AG-UI` for frontend-facing event streams
-- a `Google ADK-compatible coordinator runtime` pattern for the root SOC orchestrator
-- a `Stage 2 Google ADK native reasoning slice` for classification, investigation, and policy review
+- `Gemini` as the reasoning layer for planner, discussion, classification review, investigation, policy, and reporting
+- `OpenTelemetry-backed observability` for collector ingests and agent/tool execution
+- a pretrained-model fusion layer for web-request and network-intrusion scoring
 
-This is intentionally a practical migration step, not a risky full rewrite. The current backend still uses the working CyberAgent logic, but it now exposes:
-- an `MCP` tool registry and `tools/call` execution surface as the primary orchestration runtime
-- named agent services and A2A-style agent cards as optional protocol surfaces
-- AG-UI event streams over the same incident pipeline
+The current backend uses:
+- an `MCP` tool registry and `tools/call` execution surface as the orchestration runtime
+- Gemini-first agent discussion and planner decisions
+- pretrained external models fused with live telemetry for threat confidence
 
 ## What makes this a major-project style build
 - Multi-tenant startup/project onboarding
 - Collector-token based customer integration
 - Normalized telemetry ingestion API
 - Multi-agent orchestration for detection, correlation, classification, investigation, response, policy, action, and reporting
-- A2A-style coordinator and per-agent invoke surface
-- AG-UI compatible incident event streaming
+- Live agent discussion and coordinator planning
 - Human-in-the-loop approvals for risky actions
 - Standalone dummy customer website integration lab for end-to-end demo
 
 ## Architecture
 Collector Agent
         ↓
-SOC Coordinator Agent (ADK-compatible root runtime)
+SOC Coordinator Agent (Gemini-guided MCP planner)
         ↓
 Normalization Agent
         ↓
@@ -47,7 +45,7 @@ Action Agent
         ↓
 Reporting Agent
 
-## Protocol surfaces
+## Runtime surfaces
 
 ### MCP
 CyberAgent now exposes:
@@ -70,52 +68,17 @@ The primary multi-agent runtime now uses MCP-style tools for:
 - action execution
 - report generation
 
-### A2A
-CyberAgent now exposes:
-- `GET /a2a/agents`
-- `GET /a2a/soc_coordinator/agent-card.json`
-- `GET /a2a/agents/{agent_name}/agent-card.json`
-- `POST /a2a/agents/{agent_name}/invoke`
-- `POST /a2a/soc_coordinator/run`
-
-These endpoints let you inspect the available agents, their contracts, and invoke them through a standardized agent-to-agent style envelope.
-
-### AG-UI
+### Observability
 CyberAgent also exposes:
-- `POST /agui/runs`
+- `GET /websites/{website_id}/observability`
 
-This returns an `AG-UI` event stream with:
-- `RUN_STARTED`
-- `STATE_SNAPSHOT`
-- `TOOL_CALL_START / TOOL_CALL_ARGS / TOOL_CALL_END / TOOL_CALL_RESULT`
-- `STATE_DELTA`
-- `TEXT_MESSAGE_*`
-- `RUN_FINISHED`
-
-For this project, AG-UI is used to stream incident execution state for the SOC UI layer.
-
-## Stage 2 runtime
-
-CyberAgent now also exposes a Stage 2 runtime based on the official `google-adk` package.
-
-What Stage 2 changes:
-- `Threat Classification Agent` now prefers a native ADK runner
-- `Investigation Agent` now prefers a native ADK runner
-- `Policy Agent` now prefers a native ADK runner
-- those same agents are also mounted as real ADK A2A apps
-
-Stage 2 runtime discovery:
-- `GET /stage2/runtime`
-
-Mounted Stage 2 A2A apps:
-- `/stage2/a2a/classification`
-- `/stage2/a2a/investigation`
-- `/stage2/a2a/policy`
-
-This means the project now has:
-- MCP tools as the active orchestration runtime
-- Stage 1 coordinator/protocol tracing across the full pipeline
-- optional Stage 2 native ADK reasoning surfaces for experimentation
+This provides a live operational view of:
+- application logs
+- authentication logs
+- network logs
+- collector ingest activity
+- tool execution spans
+- detection highlights
 
 ## Setup
 
@@ -128,12 +91,9 @@ Example `.env`:
 
 ```env
 GEMINI_API_KEY=your_key_here
-GOOGLE_API_KEY=your_key_here
 MONGO_URI=mongodb://localhost:27017
 MONGO_DB_NAME=cyberagent
 ```
-
-If `GOOGLE_API_KEY` is not set, the backend will try to reuse `GEMINI_API_KEY` for the Stage 2 ADK runtime.
 
 ### 2. Run backend
 ```bash

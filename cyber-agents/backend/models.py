@@ -102,21 +102,3 @@ class CollectorIngestRequest(BaseModel):
     run_detection: bool = False
     events: list[IngestEvent] = Field(min_length=1, max_length=500)
 
-
-class A2AInvokeRequest(BaseModel):
-    task_id: Optional[str] = Field(default=None, max_length=128)
-    session_id: Optional[str] = Field(default=None, max_length=128)
-    caller: str = Field(default="soc_coordinator", min_length=2, max_length=120)
-    state: dict = Field(default_factory=dict)
-    metadata: dict = Field(default_factory=dict)
-
-
-class AGUIRunRequest(BaseModel):
-    incident_id: str = Field(min_length=4, max_length=128)
-    thread_id: str = Field(default="cyberagent-soc-thread", min_length=2, max_length=128)
-    run_id: Optional[str] = Field(default=None, max_length=128)
-
-
-class Stage2InvokeRequest(BaseModel):
-    prompt: Optional[str] = Field(default=None, max_length=20000)
-    payload: dict = Field(default_factory=dict)

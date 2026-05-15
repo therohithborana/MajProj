@@ -6,7 +6,6 @@ from bson import ObjectId
 
 from auth import require_user
 from db import db
-from adk_stage2 import get_stage2_runtime_summary
 from models import WebsiteCreateRequest, serialize_document, utc_now
 
 
@@ -150,12 +149,7 @@ async def get_website_integration(website_id: str, request: Request, user=Depend
             "mcp_endpoint": f"{origin}/mcp",
             "mcp_tools_url": f"{origin}/mcp/tools",
             "observability_url": f"{origin}/websites/{serialized['_id']}/observability",
-            "a2a_registry_url": f"{origin}/a2a/agents",
-            "a2a_root_agent_card": f"{origin}/a2a/soc_coordinator/agent-card.json",
-            "agui_run_url": f"{origin}/agui/runs",
-            "runtime": "google-adk-compatible",
-            "stage2_runtime_url": f"{origin}/stage2/runtime",
-            "stage2": get_stage2_runtime_summary(origin),
+            "runtime": "mcp_tools_plus_gemini",
             "opentelemetry": {
                 "enabled": True,
                 "collection_mode": "custom_security_events_plus_opentelemetry",

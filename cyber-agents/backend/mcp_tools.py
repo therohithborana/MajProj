@@ -21,6 +21,7 @@ from agents import (
     threat_classification,
     threat_resolve,
 )
+from gemini_client import call_gemini
 from models import serialize_document
 from otel_runtime import otel_runtime
 
@@ -189,6 +190,14 @@ RESOLUTION_PLAN = [
     "response.generate_report",
 ]
 
+PLANNER_SYSTEM_PROMPT = """
+You are the SOC Coordinator Agent for CyberAgent.
+Your role is to orchestrate specialist agents over MCP tools based on the current incident state.
+Choose the single next tool that best advances the investigation or response.
+You may skip redundant steps when the state already contains what the next agent needs.
+Return strict JSON only.
+""".strip()
+
 
 def _state_summary(state: dict) -> dict:
     classification = state.get("classification") or {}
@@ -251,15 +260,54 @@ class McpMultiAgentCoordinator:
     def __init__(self):
         self.runtime = McpToolRuntime()
 
+    def _choose_next_tool(self, state: dict, pending_tools: list[str], phase: str) -> tuple[str, str, bool]:
+        fallback_tool = pending_tools[0]
+        planner_prompt = f"""
+Current phase: {phase}
+Pending tools: {pending_tools}
+Current state summary:
+{json.dumps(_state_summary(state), ensure_ascii=False)}
+
+Return a JSON object with exactly this shape:
+{{
+  "next_tool": "one item from pending tools",
+  "reason": "one concise sentence",
+  "skip_challenge": false
+}}
+
+Rules:
+- next_tool must be one of the pending tools
+- skip_challenge may only be true if analysis.challenge_classification is still pending and the classification confidence is already strong
+- return JSON only
+""".strip()
+        response = call_gemini(f"{PLANNER_SYSTEM_PROMPT}\n\n{planner_prompt}")
+        try:
+            parsed = json.loads(response.strip().removeprefix("```json").removesuffix("```").strip())
+            chosen = parsed.get("next_tool")
+            if chosen in pending_tools:
+                return chosen, str(parsed.get("reason") or "Coordinator selected the next MCP tool.").strip(), bool(parsed.get("skip_challenge"))
+        except Exception:
+            pass
+        return fallback_tool, f"Coordinator selected {fallback_tool} from the remaining MCP plan.", False
+
     def run_detection_pipeline(self, state: dict) -> dict:
         current = deepcopy(state)
         tool_trace = list(current.get("tool_trace", []))
-        for tool_name in DETECTION_PLAN:
+        pending_tools = list(DETECTION_PLAN)
+        planner_trace = []
+        while pending_tools:
+            tool_name, reason, skip_challenge = self._choose_next_tool(current, pending_tools, "detection")
+            if skip_challenge and "analysis.challenge_classification" in pending_tools:
+                pending_tools.remove("analysis.challenge_classification")
+            if tool_name not in pending_tools:
+                tool_name = pending_tools[0]
+            pending_tools.remove(tool_name)
             before = deepcopy(current)
             result = self.runtime.call_tool(tool_name, {"state": current})
             current = result["structuredContent"]["state"]
             llm_agent = LLM_AGENT_BY_TOOL.get(tool_name)
             llm_usage = (current.get("llm_usage") or {}).get(llm_agent, {}) if llm_agent else {}
+            planner_trace.append({"phase": "detection", "tool": tool_name, "reason": reason})
             current["tool_trace"] = tool_trace + [
                 {
                     "tool": tool_name,
@@ -270,21 +318,30 @@ class McpMultiAgentCoordinator:
                     "llm_used": bool(llm_usage.get("used")) if llm_agent else False,
                     "llm_runtime": llm_usage.get("runtime") if llm_agent else None,
                     "prompt_profile": TOOL_PROMPT_PROFILE.get(tool_name, {}),
+                    "planner_reason": reason,
                 }
             ]
             tool_trace = list(current["tool_trace"])
         current.setdefault("runtime_metadata", {}).update(self.runtime_metadata())
+        current["runtime_metadata"]["planner_trace"] = planner_trace
         return current
 
     def run_resolution_pipeline(self, state: dict) -> dict:
         current = deepcopy(state)
         tool_trace = list(current.get("tool_trace", []))
-        for tool_name in RESOLUTION_PLAN:
+        pending_tools = list(RESOLUTION_PLAN)
+        planner_trace = list((current.get("runtime_metadata") or {}).get("planner_trace") or [])
+        while pending_tools:
+            tool_name, reason, _ = self._choose_next_tool(current, pending_tools, "resolution")
+            if tool_name not in pending_tools:
+                tool_name = pending_tools[0]
+            pending_tools.remove(tool_name)
             before = deepcopy(current)
             result = self.runtime.call_tool(tool_name, {"state": current})
             current = result["structuredContent"]["state"]
             llm_agent = LLM_AGENT_BY_TOOL.get(tool_name)
             llm_usage = (current.get("llm_usage") or {}).get(llm_agent, {}) if llm_agent else {}
+            planner_trace.append({"phase": "resolution", "tool": tool_name, "reason": reason})
             current["tool_trace"] = tool_trace + [
                 {
                     "tool": tool_name,
@@ -295,10 +352,12 @@ class McpMultiAgentCoordinator:
                     "llm_used": bool(llm_usage.get("used")) if llm_agent else False,
                     "llm_runtime": llm_usage.get("runtime") if llm_agent else None,
                     "prompt_profile": TOOL_PROMPT_PROFILE.get(tool_name, {}),
+                    "planner_reason": reason,
                 }
             ]
             tool_trace = list(current["tool_trace"])
         current.setdefault("runtime_metadata", {}).update(self.runtime_metadata())
+        current["runtime_metadata"]["planner_trace"] = planner_trace
         return current
 
     def runtime_metadata(self) -> dict:
