@@ -7,9 +7,12 @@ const sourceLabelInput = document.getElementById("sourceLabel");
 const collectorStatus = document.getElementById("collectorStatus");
 const activityLog = document.getElementById("activityLog");
 const HEARTBEAT_INTERVAL_MS = 8000;
+const ADMIN_ATTEMPT_LIMIT = 5;
+const ADMIN_ATTEMPT_WINDOW_MS = 60 * 1000;
 
 let heartbeatTimer = null;
 let syncInFlight = false;
+let adminAttemptTimestamps = [];
 
 function isoNow() {
   return new Date().toISOString();
@@ -207,16 +210,22 @@ function healthyTrafficPayload() {
       accessEvent(srcIp, "/products"),
       accessEvent(srcIp, "/pricing"),
       accessEvent(srcIp, "/checkout", "POST", 200, "novacart-browser", 920),
+      {
+        ...authEvent(srcIp, "customer@novacart.io", "SUCCESS", 443),
+        port: 443,
+        message: `${isoNow()} AUTH service=app src=${srcIp} user=customer@novacart.io result=SUCCESS port=443`,
+      },
+      networkEvent(srcIp, TARGET_IP, 443, randInt(22, 54), randInt(4800, 9200), "ACK"),
     ],
   };
 }
 
-function bruteForcePayload() {
+function bruteForcePayload(username = "admin") {
   const srcIp = "198.51.100.77";
   return {
     run_detection: true,
     events: [
-      ...Array.from({ length: 12 }, () => authEvent(srcIp, "admin", "FAILED")),
+      ...Array.from({ length: 12 }, () => authEvent(srcIp, username, "FAILED")),
       ...Array.from({ length: 8 }, () => networkEvent(srcIp, TARGET_IP, 22, 140, 4500, "ACK")),
       accessEvent(srcIp, "/admin/login", "POST", 401, "credential-checker", 742),
     ],
@@ -265,8 +274,39 @@ function customerLoginPayload(email) {
         port: 443,
         message: `${isoNow()} AUTH service=app src=${srcIp} user=${email || "customer@novacart.io"} result=SUCCESS port=443`,
       },
+      networkEvent(srcIp, TARGET_IP, 443, randInt(18, 46), randInt(3800, 7400), "ACK"),
     ],
   };
+}
+
+function rateLimitPayload(username) {
+  const srcIp = "198.51.100.77";
+  const user = username || "admin";
+  return {
+    run_detection: true,
+    events: [
+      accessEvent(srcIp, "/admin/login", "POST", 429, "merchant-console", 512),
+      {
+        ...authEvent(srcIp, user, "RATE_LIMITED", 443),
+        port: 443,
+        message: `${isoNow()} AUTH service=merchant-console src=${srcIp} user=${user} result=RATE_LIMITED port=443`,
+      },
+      networkEvent(srcIp, TARGET_IP, 443, randInt(90, 180), randInt(12000, 28000), "ACK"),
+    ],
+  };
+}
+
+function recordAdminAttempt() {
+  const now = Date.now();
+  adminAttemptTimestamps = adminAttemptTimestamps.filter((timestamp) => now - timestamp < ADMIN_ATTEMPT_WINDOW_MS);
+  adminAttemptTimestamps.push(now);
+  return adminAttemptTimestamps.length;
+}
+
+function adminAttemptsExceeded() {
+  const now = Date.now();
+  adminAttemptTimestamps = adminAttemptTimestamps.filter((timestamp) => now - timestamp < ADMIN_ATTEMPT_WINDOW_MS);
+  return adminAttemptTimestamps.length >= ADMIN_ATTEMPT_LIMIT;
 }
 
 document.getElementById("saveConfigBtn").addEventListener("click", persistConfig);
@@ -316,10 +356,27 @@ document.getElementById("customerLoginForm").addEventListener("submit", (event) 
 document.getElementById("adminLoginForm").addEventListener("submit", (event) => {
   event.preventDefault();
   const adminUser = document.getElementById("adminUser").value.trim() || "admin";
+  if (adminAttemptsExceeded()) {
+    setStatus("Too many merchant sign-in attempts. Try again in a minute.", "error");
+    addLogEntry(
+      "Merchant login temporarily limited",
+      "NovaCart blocked repeated merchant sign-in attempts on the storefront and sent a rate-limit security signal to the SOC dashboard."
+    );
+    sendScenario(
+      "Merchant sign-in temporarily limited",
+      "NovaCart detected too many merchant sign-in attempts and triggered a local rate limit.",
+      rateLimitPayload(adminUser)
+    );
+    return;
+  }
+  const attemptCount = recordAdminAttempt();
+  if (attemptCount >= ADMIN_ATTEMPT_LIMIT) {
+    setStatus("Merchant sign-in attempts reached the storefront safety limit.", "warn");
+  }
   sendScenario(
     "Merchant login",
     `The merchant portal generated sign-in activity for user ${adminUser}.`,
-    bruteForcePayload()
+    bruteForcePayload(adminUser)
   );
 });
 

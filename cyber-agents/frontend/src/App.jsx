@@ -166,7 +166,6 @@ function App() {
   const [jobs, setJobs] = useState([]);
   const [integration, setIntegration] = useState(null);
   const [connected, setConnected] = useState(false);
-  const [autoRunning, setAutoRunning] = useState(false);
   const [decisionLoading, setDecisionLoading] = useState({});
   const [copyFeedback, setCopyFeedback] = useState("");
   const [error, setError] = useState("");
@@ -188,7 +187,7 @@ function App() {
   const [notesSaving, setNotesSaving] = useState(false);
   const [assigneeDraft, setAssigneeDraft] = useState("");
   const [assigning, setAssigning] = useState(false);
-  const [incidentView, setIncidentView] = useState("discussion");
+  const [incidentDetailTab, setIncidentDetailTab] = useState("overview");
 
   useEffect(() => {
     if (!token) {
@@ -277,7 +276,6 @@ function App() {
             mapped[incident.attack_id] = incident;
           });
           setIncidents(mapped);
-          setAutoRunning(Boolean(payload.data.running));
           return;
         }
 
@@ -427,6 +425,10 @@ function App() {
     setAssigneeDraft(selectedIncident?.assignee?.name || "");
   }, [selectedIncident?.attack_id, selectedIncident?.assignee?.name]);
 
+  useEffect(() => {
+    setIncidentDetailTab("overview");
+  }, [selectedIncident?.attack_id]);
+
   const visibleAgentTrace = useMemo(() => {
     if (!selectedIncident) {
       return [];
@@ -524,6 +526,22 @@ function App() {
   );
 
   const recentJobs = useMemo(() => (jobs || []).slice(0, 5), [jobs]);
+  const reportIncidents = useMemo(
+    () => websiteIncidents.filter((incident) => incident.incident_report?.report_id),
+    [websiteIncidents]
+  );
+  const accessEvents = useMemo(
+    () => (telemetry.recent_events || []).filter((event) => event.event_type === "access").slice(0, 6),
+    [telemetry]
+  );
+  const authEvents = useMemo(
+    () => (telemetry.recent_events || []).filter((event) => event.event_type === "auth").slice(0, 6),
+    [telemetry]
+  );
+  const networkEvents = useMemo(
+    () => (telemetry.recent_events || []).filter((event) => event.event_type === "network").slice(0, 6),
+    [telemetry]
+  );
 
   const notificationItems = useMemo(() => {
     const items = [];
@@ -596,20 +614,6 @@ function App() {
     try {
       setError("");
       await apiFetch(`/websites/${selectedWebsiteId}/simulate`, { method: "POST" }, token);
-      await loadSelectedWebsiteData(selectedWebsiteId, token);
-    } catch (err) {
-      setError(err.message);
-    }
-  }
-
-  async function toggleAuto() {
-    if (!selectedWebsiteId) {
-      return;
-    }
-    try {
-      const endpoint = autoRunning ? `/websites/${selectedWebsiteId}/monitor/stop` : `/websites/${selectedWebsiteId}/monitor/start`;
-      const data = await apiFetch(endpoint, { method: "POST" }, token);
-      setAutoRunning(Boolean(data.running));
       await loadSelectedWebsiteData(selectedWebsiteId, token);
     } catch (err) {
       setError(err.message);
@@ -1002,9 +1006,24 @@ function App() {
                     </div>
                     <div className="flex-gap">
                       <button onClick={simulateAttack} className="btn btn-primary">Simulate Attack</button>
-                      <button onClick={toggleAuto} className={`btn ${autoRunning ? 'btn-danger' : 'btn-secondary'}`}>
-                        {autoRunning ? "Stop Monitor" : "Start Monitor"}
-                      </button>
+                    </div>
+                  </div>
+
+                  <div className="card" style={{marginBottom: 24}}>
+                    <div className="card-title" style={{marginBottom: 16}}>Live Orchestration Feed</div>
+                    <div style={{display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 360, overflowY: 'auto'}}>
+                      {feed.filter(e => !selectedWebsiteId || e.data.website_id === selectedWebsiteId).map(entry => (
+                        <div key={entry.id} style={{padding: 12, background: 'rgba(255,255,255,0.03)', borderRadius: 12, borderLeft: `3px solid ${colors.gold}`}}>
+                          <div className="flex-between" style={{marginBottom: 6}}>
+                            <span style={{fontSize: 13, fontWeight: 600}}>{entry.data.agent_trace_entry?.agent || entry.type}</span>
+                            <span style={{fontSize: 11, color: 'var(--text-subtle)'}}>{new Date(entry.timestamp).toLocaleTimeString()}</span>
+                          </div>
+                          <div style={{fontSize: 13, color: 'var(--text-muted)'}}>{entry.data.message || entry.data.current_stage || "Event"}</div>
+                        </div>
+                      ))}
+                      {!feed.filter(e => !selectedWebsiteId || e.data.website_id === selectedWebsiteId).length ? (
+                        <div style={{fontSize: 13, color: 'var(--text-muted)'}}>Agent activity, approvals, and reporting steps will stream here live.</div>
+                      ) : null}
                     </div>
                   </div>
 
@@ -1102,20 +1121,6 @@ function App() {
 
                   <div className="grid-layout">
                     <div className="card">
-                      <div className="card-title" style={{marginBottom: 16}}>Live Orchestration Feed</div>
-                      <div style={{display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 400, overflowY: 'auto'}}>
-                        {feed.filter(e => !selectedWebsiteId || e.data.website_id === selectedWebsiteId).map(entry => (
-                          <div key={entry.id} style={{padding: 12, background: 'rgba(255,255,255,0.03)', borderRadius: 8, borderLeft: `3px solid ${colors.gold}`}}>
-                            <div className="flex-between" style={{marginBottom: 6}}>
-                              <span style={{fontSize: 13, fontWeight: 600}}>{entry.data.agent_trace_entry?.agent || entry.type}</span>
-                              <span style={{fontSize: 11, color: 'var(--text-subtle)'}}>{new Date(entry.timestamp).toLocaleTimeString()}</span>
-                            </div>
-                            <div style={{fontSize: 13, color: 'var(--text-muted)'}}>{entry.data.message || entry.data.current_stage || "Event"}</div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="card">
                       <div className="card-title" style={{marginBottom: 16}}>Projects</div>
                       <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
                         {websites.map(w => (
@@ -1127,6 +1132,27 @@ function App() {
                             <div style={{fontSize: 12, color: 'var(--text-subtle)'}}>{w.domain}</div>
                           </div>
                         ))}
+                      </div>
+                    </div>
+                    <div className="card">
+                      <div className="card-title" style={{marginBottom: 16}}>Reporting Agent Outputs</div>
+                      <div style={{display: 'grid', gap: 12}}>
+                        {reportIncidents.length ? reportIncidents.slice(0, 6).map((incident) => (
+                          <div key={incident.attack_id} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 12, border: '1px solid var(--border-color)'}}>
+                            <div className="flex-between" style={{marginBottom: 6}}>
+                              <span style={{fontWeight: 700, fontSize: 13}}>{incident.incident_report.report_id}</span>
+                              <span style={{fontSize: 12, color: 'var(--text-subtle)'}}>{incident.classification?.predicted_class || 'Incident'}</span>
+                            </div>
+                            <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6, marginBottom: 8}}>
+                              {incident.incident_report.executive_summary}
+                            </div>
+                            <button className="btn btn-secondary" style={{padding: '8px 12px'}} onClick={() => { setCurrentTab('incidents'); setSelectedIncidentId(incident.attack_id); setIncidentDetailTab('report'); }}>
+                              Open report
+                            </button>
+                          </div>
+                        )) : (
+                          <div style={{fontSize: 13, color: 'var(--text-muted)'}}>Generated reports will appear here after the reporting agent completes an incident.</div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1262,22 +1288,27 @@ function App() {
                   
                   <div className="card">
                     <div className="card-title" style={{marginBottom: 16}}>Normalized Event Streams</div>
-                    <table className="data-table">
-                      <thead>
-                        <tr>
-                          <th>Event Type</th>
-                          <th>Message Details</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(telemetry.recent_events || []).slice(0, 10).map((event, i) => (
-                          <tr key={i}>
-                            <td style={{fontWeight: 600, textTransform: 'capitalize'}}>{event.event_type}</td>
-                            <td>{event.message}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                    <div className="grid-layout">
+                      {[
+                        { title: 'Application Logs', events: accessEvents, empty: 'Application events will appear here.' },
+                        { title: 'Authentication Logs', events: authEvents, empty: 'Authentication events will appear here.' },
+                        { title: 'Network Logs', events: networkEvents, empty: 'Network events will appear here.' },
+                      ].map((group) => (
+                        <div key={group.title} style={{background: 'var(--bg-canvas)', borderRadius: 12, border: '1px solid var(--border-color)', padding: 14}}>
+                          <div style={{fontSize: 13, fontWeight: 700, marginBottom: 10}}>{group.title}</div>
+                          <div style={{display: 'grid', gap: 8}}>
+                            {group.events.length ? group.events.map((event, i) => (
+                              <div key={`${group.title}-${i}`} style={{padding: 10, borderRadius: 10, background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-color)'}}>
+                                <div style={{fontSize: 12, color: 'var(--text-subtle)', marginBottom: 4}}>{new Date(event.timestamp).toLocaleTimeString()}</div>
+                                <div style={{fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6}}>{event.message}</div>
+                              </div>
+                            )) : (
+                              <div style={{fontSize: 12, color: 'var(--text-muted)'}}>{group.empty}</div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
               )}
@@ -1373,6 +1404,23 @@ function App() {
                           </div>
                         </div>
 
+                        <div className="flex-gap" style={{marginBottom: 16, flexWrap: 'wrap'}}>
+                          <button className={`btn ${incidentDetailTab === 'overview' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setIncidentDetailTab('overview')}>
+                            Overview
+                          </button>
+                          <button className={`btn ${incidentDetailTab === 'discussion' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setIncidentDetailTab('discussion')}>
+                            Agent Discussion
+                          </button>
+                          <button className={`btn ${incidentDetailTab === 'analysis' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setIncidentDetailTab('analysis')}>
+                            Analysis Trace
+                          </button>
+                          <button className={`btn ${incidentDetailTab === 'report' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setIncidentDetailTab('report')}>
+                            Report
+                          </button>
+                        </div>
+
+                        {incidentDetailTab === 'overview' ? (
+                          <>
                         <div style={{padding: 16, background: 'var(--bg-canvas)', border: '1px solid var(--border-color)', borderRadius: 12, marginBottom: 24}}>
                           <div className="card-title" style={{marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>Ownership</div>
                           <div className="flex-gap" style={{alignItems: 'stretch', flexWrap: 'wrap'}}>
@@ -1435,16 +1483,10 @@ function App() {
                           </div>
                         ) : null}
 
-                        <div className="flex-gap" style={{marginBottom: 16, flexWrap: 'wrap'}}>
-                          <button className={`btn ${incidentView === 'discussion' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setIncidentView('discussion')}>
-                            Agent Discussion
-                          </button>
-                          <button className={`btn ${incidentView === 'analysis' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setIncidentView('analysis')}>
-                            Analysis Trace
-                          </button>
-                        </div>
+                          </>
+                        ) : null}
 
-                        {incidentView === 'discussion' ? (
+                        {incidentDetailTab === 'discussion' ? (
                           <>
                             <div className="card-title" style={{marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>AGENT DISCUSSION</div>
                             <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
@@ -1471,7 +1513,9 @@ function App() {
                               ) : null}
                             </div>
                           </>
-                        ) : (
+                        ) : null}
+
+                        {incidentDetailTab === 'analysis' ? (
                           <>
                             <div className="card-title" style={{marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>AGENT TRACE</div>
                             <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
@@ -1573,7 +1617,30 @@ function App() {
                               </>
                             ) : null}
                           </>
-                        )}
+                        ) : null}
+
+                        {incidentDetailTab === 'report' ? (
+                          <>
+                        <div style={{padding: 16, background: 'var(--bg-canvas)', border: '1px solid var(--border-color)', borderRadius: 12, marginBottom: 24}}>
+                          <div className="card-title" style={{marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>Reporting Agent Summary</div>
+                          {selectedIncident.incident_report ? (
+                            <div style={{display: 'grid', gap: 12}}>
+                              <div style={{fontSize: 12, color: 'var(--text-subtle)'}}>{selectedIncident.incident_report.report_id}</div>
+                              <div style={{fontSize: 14, color: 'var(--text-muted)', lineHeight: 1.8}}>
+                                {selectedIncident.incident_report.executive_summary}
+                              </div>
+                              {(selectedIncident.incident_report.recommendations || []).length ? (
+                                <div style={{display: 'grid', gap: 8}}>
+                                  {(selectedIncident.incident_report.recommendations || []).map((item, idx) => (
+                                    <div key={idx} style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6}}>• {item}</div>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : (
+                            <div style={{fontSize: 13, color: 'var(--text-muted)'}}>The reporting agent will publish the final incident summary here after resolution.</div>
+                          )}
+                        </div>
 
                         <div className="card-title" style={{marginTop: 24, marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>CASE NOTES</div>
                         <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
@@ -1608,6 +1675,8 @@ function App() {
                             </button>
                           </div>
                         </div>
+                          </>
+                        ) : null}
                       </div>
                     ) : (
                       <div className="card" style={{display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 400, color: 'var(--text-muted)'}}>
