@@ -409,26 +409,30 @@ def _observability_snapshot(website_id: str):
     return otel_runtime.snapshot(website_id)
 
 
-async def _broadcast_trace(website_id: str, attack_id: str, state: dict):
-    discussion_entries = state.get("agent_discussion", [])
-    for index, entry in enumerate(state.get("agent_trace", [])):
-        discussion_entry = discussion_entries[index] if index < len(discussion_entries) else None
-        await broadcast(
-            "agent_update",
-            {
-                "attack_id": attack_id,
-                "website_id": website_id,
-                "current_stage": entry["stage"],
-                "message": discussion_entry.get("message") if discussion_entry else entry["summary"],
-                "agent_trace_entry": entry,
-                "agent_discussion_entry": discussion_entry,
-                "agent_discussion": discussion_entries[: index + 1] if discussion_entry else discussion_entries,
-                "reasoning_trace": state.get("reasoning_trace", [])[: max(index + 1, len(state.get("reasoning_trace", [])))],
-                "policy_decision": state.get("policy_decision"),
-                "runtime_metadata": state.get("runtime_metadata", {}),
-            },
+def _make_progress_callback(loop, website_id, attack_id):
+    def _cb(tool_name, current_state, reason):
+        discussion = current_state.get("agent_discussion", [])
+        trace = current_state.get("agent_trace", [])
+        reasoning = current_state.get("reasoning_trace", [])
+        asyncio.run_coroutine_threadsafe(
+            broadcast(
+                "agent_update",
+                {
+                    "attack_id": attack_id,
+                    "website_id": website_id,
+                    "current_stage": current_state.get("current_stage"),
+                    "message": discussion[-1].get("message") if discussion else reason,
+                    "agent_trace_entry": trace[-1] if trace else None,
+                    "agent_discussion_entry": discussion[-1] if discussion else None,
+                    "agent_discussion": discussion,
+                    "reasoning_trace": reasoning,
+                    "policy_decision": current_state.get("policy_decision"),
+                    "runtime_metadata": current_state.get("runtime_metadata", {}),
+                },
+            ),
+            loop,
         )
-        await asyncio.sleep(0.3)
+    return _cb
 
 
 async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dict, job_id: str | None = None):
@@ -470,10 +474,11 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
     )
 
     loop = asyncio.get_event_loop()
+    progress_cb = _make_progress_callback(loop, website["_id"], attack_id)
     if job_id:
         _update_job(job_id, "running", metadata={"attack_id": attack_id, "phase": "detection"})
     try:
-        result = await loop.run_in_executor(None, mcp_coordinator.run_detection_pipeline, initial_state)
+        result = await loop.run_in_executor(None, mcp_coordinator.run_detection_pipeline, initial_state, progress_cb)
     except Exception as exc:
         if job_id:
             _update_job(job_id, "failed", error=str(exc), metadata={"attack_id": attack_id, "phase": "detection"})
@@ -490,8 +495,6 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
     result["website_id"] = website["_id"]
     if job_id:
         result.setdefault("runtime_metadata", {})["job_id"] = job_id
-
-    await _broadcast_trace(website["_id"], attack_id, result)
 
     active_incidents[attack_id] = result
     _update_policy_memory(website["_id"], result, "proposed")
@@ -553,6 +556,7 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
                 None,
                 mcp_coordinator.run_resolution_pipeline,
                 {**result, "approval_status": "auto_approved"},
+                progress_cb,
             )
         except Exception as exc:
             if job_id:
@@ -625,6 +629,7 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
                 None,
                 mcp_coordinator.run_resolution_pipeline,
                 {**result, "approval_status": "manual_required"},
+                progress_cb,
             )
         except Exception as exc:
             if job_id:

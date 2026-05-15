@@ -263,13 +263,13 @@ class McpMultiAgentCoordinator:
             reason = "Coordinator is advancing the bounded response pipeline from planning through policy and execution."
         return fallback_tool, reason, False
 
-    def run_detection_pipeline(self, state: dict) -> dict:
+    def _run_plan(self, state: dict, plan: list[str], phase: str, progress_callback: Callable = None) -> dict:
         current = deepcopy(state)
         tool_trace = list(current.get("tool_trace", []))
-        pending_tools = list(DETECTION_PLAN)
-        planner_trace = []
+        pending_tools = list(plan)
+        planner_trace = list((current.get("runtime_metadata") or {}).get("planner_trace") or [])
         while pending_tools:
-            tool_name, reason, skip_challenge = self._choose_next_tool(current, pending_tools, "detection")
+            tool_name, reason, skip_challenge = self._choose_next_tool(current, pending_tools, phase)
             if skip_challenge and "analysis.challenge_classification" in pending_tools:
                 pending_tools.remove("analysis.challenge_classification")
             if tool_name not in pending_tools:
@@ -280,7 +280,7 @@ class McpMultiAgentCoordinator:
             current = result["structuredContent"]["state"]
             llm_agent = LLM_AGENT_BY_TOOL.get(tool_name)
             llm_usage = (current.get("llm_usage") or {}).get(llm_agent, {}) if llm_agent else {}
-            planner_trace.append({"phase": "detection", "tool": tool_name, "reason": reason})
+            planner_trace.append({"phase": phase, "tool": tool_name, "reason": reason})
             current["tool_trace"] = tool_trace + [
                 {
                     "tool": tool_name,
@@ -295,43 +295,17 @@ class McpMultiAgentCoordinator:
                 }
             ]
             tool_trace = list(current["tool_trace"])
+            if progress_callback:
+                progress_callback(tool_name, current, reason)
         current.setdefault("runtime_metadata", {}).update(self.runtime_metadata())
         current["runtime_metadata"]["planner_trace"] = planner_trace
         return current
 
-    def run_resolution_pipeline(self, state: dict) -> dict:
-        current = deepcopy(state)
-        tool_trace = list(current.get("tool_trace", []))
-        pending_tools = list(RESOLUTION_PLAN)
-        planner_trace = list((current.get("runtime_metadata") or {}).get("planner_trace") or [])
-        while pending_tools:
-            tool_name, reason, _ = self._choose_next_tool(current, pending_tools, "resolution")
-            if tool_name not in pending_tools:
-                tool_name = pending_tools[0]
-            pending_tools.remove(tool_name)
-            before = deepcopy(current)
-            result = self.runtime.call_tool(tool_name, {"state": current})
-            current = result["structuredContent"]["state"]
-            llm_agent = LLM_AGENT_BY_TOOL.get(tool_name)
-            llm_usage = (current.get("llm_usage") or {}).get(llm_agent, {}) if llm_agent else {}
-            planner_trace.append({"phase": "resolution", "tool": tool_name, "reason": reason})
-            current["tool_trace"] = tool_trace + [
-                {
-                    "tool": tool_name,
-                    "agent": TOOLS_BY_NAME[tool_name].owner_agent,
-                    "input_summary": _state_summary(before),
-                    "output_summary": result["structuredContent"]["summary"],
-                    "llm_agent": llm_agent,
-                    "llm_used": bool(llm_usage.get("used")) if llm_agent else False,
-                    "llm_runtime": llm_usage.get("runtime") if llm_agent else None,
-                    "prompt_profile": TOOL_PROMPT_PROFILE.get(tool_name, {}),
-                    "planner_reason": reason,
-                }
-            ]
-            tool_trace = list(current["tool_trace"])
-        current.setdefault("runtime_metadata", {}).update(self.runtime_metadata())
-        current["runtime_metadata"]["planner_trace"] = planner_trace
-        return current
+    def run_detection_pipeline(self, state: dict, progress_callback: Callable = None) -> dict:
+        return self._run_plan(state, DETECTION_PLAN, "detection", progress_callback)
+
+    def run_resolution_pipeline(self, state: dict, progress_callback: Callable = None) -> dict:
+        return self._run_plan(state, RESOLUTION_PLAN, "resolution", progress_callback)
 
     def runtime_metadata(self) -> dict:
         return {
