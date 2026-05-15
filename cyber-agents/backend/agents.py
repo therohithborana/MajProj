@@ -204,7 +204,7 @@ def _speak(
     kind: str = "statement",
 ):
     message, llm_meta = _llm_text(system_prompt, context_prompt, fallback)
-    runtime = f"openrouter:{llm_meta.get('model')}" if llm_meta.get("used") and llm_meta.get("model") else "fallback"
+    runtime = _llm_runtime_label(llm_meta) if llm_meta.get("used") else "fallback"
     _record_reasoning(
         state,
         speaker,
@@ -236,6 +236,19 @@ def _mark_llm_usage(state: AgentState, agent: str, used: bool, runtime: str | No
         usage[agent]["runtime"] = runtime
     state["llm_usage"] = usage
     logger.info("LLM usage agent=%s used=%s runtime=%s", agent, used, runtime or "fallback")
+
+
+def _llm_runtime_label(meta: dict | None) -> str:
+    meta = meta or {}
+    provider = meta.get("provider")
+    model = meta.get("model")
+    if provider and model:
+        return f"{provider}:{model}"
+    if provider:
+        return str(provider)
+    if model:
+        return str(model)
+    return "fallback"
 
 
 def _normalize_scores(raw_scores, predicted_class):
@@ -501,7 +514,7 @@ Rules:
             llm_meta.get("text", ""),
             reasoning_details=llm_meta.get("reasoning_details", []),
             used=bool(llm_meta.get("used")),
-            runtime=f"openrouter:{llm_meta.get('model')}" if llm_meta.get("used") and llm_meta.get("model") else "fallback",
+            runtime=_llm_runtime_label(llm_meta) if llm_meta.get("used") else "fallback",
             prompt_preview=llm_detection_prompt,
         )
         if isinstance(parsed, dict):
@@ -510,7 +523,7 @@ Rules:
             summary = str(parsed.get("summary") or summary).strip() or summary
             llm_candidates = [label for label in parsed.get("candidate_labels", []) if label in CLASS_LABELS]
             candidate_labels = llm_candidates or candidate_labels
-            _mark_llm_usage(state, "Detection Agent", True, f"openrouter:{llm_meta.get('model')}" if llm_meta.get("model") else "openrouter")
+            _mark_llm_usage(state, "Detection Agent", True, _llm_runtime_label(llm_meta))
         else:
             _mark_llm_usage(state, "Detection Agent", False)
     except Exception:
@@ -782,7 +795,7 @@ Rules:
             llm_meta.get("text", ""),
             reasoning_details=llm_meta.get("reasoning_details", []),
             used=bool(llm_meta.get("used")),
-            runtime=f"openrouter:{llm_meta.get('model')}" if llm_meta.get("used") and llm_meta.get("model") else "fallback",
+            runtime=_llm_runtime_label(llm_meta) if llm_meta.get("used") else "fallback",
             prompt_preview=classifier_prompt,
         )
         if isinstance(parsed, dict):
@@ -800,7 +813,7 @@ Rules:
                 severity = parsed.get("severity", severity)
                 confidence_source = "ml_model_plus_llm_review"
                 reasoning = parsed.get("reasoning", reasoning)
-                _mark_llm_usage(state, "Threat Classification Agent", True, f"openrouter:{llm_meta.get('model')}" if llm_meta.get("model") else "openrouter")
+                _mark_llm_usage(state, "Threat Classification Agent", True, _llm_runtime_label(llm_meta))
             else:
                 _mark_llm_usage(state, "Threat Classification Agent", False)
         else:
@@ -947,12 +960,12 @@ Rules:
             llm_meta.get("text", ""),
             reasoning_details=llm_meta.get("reasoning_details", []),
             used=bool(llm_meta.get("used")),
-            runtime=f"openrouter:{llm_meta.get('model')}" if llm_meta.get("used") and llm_meta.get("model") else "fallback",
+            runtime=_llm_runtime_label(llm_meta) if llm_meta.get("used") else "fallback",
             prompt_preview=prompt,
         )
         if isinstance(parsed, dict):
             fallback.update(parsed)
-            _mark_llm_usage(state, "Challenge Agent", True, f"openrouter:{llm_meta.get('model')}" if llm_meta.get("model") else "openrouter")
+            _mark_llm_usage(state, "Challenge Agent", True, _llm_runtime_label(llm_meta))
         else:
             _mark_llm_usage(state, "Challenge Agent", False)
     except Exception:
@@ -1112,13 +1125,13 @@ Rules:
             llm_meta.get("text", ""),
             reasoning_details=llm_meta.get("reasoning_details", []),
             used=bool(llm_meta.get("used")),
-            runtime=f"openrouter:{llm_meta.get('model')}" if llm_meta.get("used") and llm_meta.get("model") else "fallback",
+            runtime=_llm_runtime_label(llm_meta) if llm_meta.get("used") else "fallback",
             prompt_preview=prompt,
         )
         if not isinstance(parsed, dict) or "steps" not in parsed:
             raise ValueError("Invalid mitigation plan")
         state["mitigation_plan"] = parsed
-        _mark_llm_usage(state, "Response Planning Agent", True, f"openrouter:{llm_meta.get('model')}" if llm_meta.get("model") else "openrouter")
+        _mark_llm_usage(state, "Response Planning Agent", True, _llm_runtime_label(llm_meta))
     except Exception:
         state["mitigation_plan"] = fallback
         _mark_llm_usage(state, "Response Planning Agent", False)
@@ -1245,7 +1258,7 @@ Rules:
             llm_meta.get("text", ""),
             reasoning_details=llm_meta.get("reasoning_details", []),
             used=bool(llm_meta.get("used")),
-            runtime=f"openrouter:{llm_meta.get('model')}" if llm_meta.get("used") and llm_meta.get("model") else "fallback",
+            runtime=_llm_runtime_label(llm_meta) if llm_meta.get("used") else "fallback",
             prompt_preview=policy_prompt,
         )
         mode = parsed.get("mode", mode)
@@ -1254,7 +1267,7 @@ Rules:
         reason = parsed.get("reason", reason)
         safety_notes = parsed.get("safety_notes", [])
         decision_source = "llm_reviewed"
-        _mark_llm_usage(state, "Policy Agent", True, f"openrouter:{llm_meta.get('model')}" if llm_meta.get("model") else "openrouter")
+        _mark_llm_usage(state, "Policy Agent", True, _llm_runtime_label(llm_meta))
     except Exception:
         _mark_llm_usage(state, "Policy Agent", False)
 
@@ -1494,13 +1507,13 @@ Return JSON only.
             llm_meta.get("text", ""),
             reasoning_details=llm_meta.get("reasoning_details", []),
             used=bool(llm_meta.get("used")),
-            runtime=f"openrouter:{llm_meta.get('model')}" if llm_meta.get("used") and llm_meta.get("model") else "fallback",
+            runtime=_llm_runtime_label(llm_meta) if llm_meta.get("used") else "fallback",
             prompt_preview=prompt,
         )
         if not isinstance(parsed, dict) or "executive_summary" not in parsed:
             raise ValueError("Invalid incident report")
         state["incident_report"] = parsed
-        _mark_llm_usage(state, "Reporting Agent", True, f"openrouter:{llm_meta.get('model')}" if llm_meta.get("model") else "openrouter")
+        _mark_llm_usage(state, "Reporting Agent", True, _llm_runtime_label(llm_meta))
     except Exception:
         state["incident_report"] = fallback
         _mark_llm_usage(state, "Reporting Agent", False)
