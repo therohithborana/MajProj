@@ -1,33 +1,25 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { LayoutDashboard, ShieldAlert, Activity, Settings, Bell, Search, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 
 const API_BASE = "http://localhost:8000";
 const WS_URL = "ws://localhost:8000/ws";
 const TOKEN_KEY = "cyberagent_token";
 
 const colors = {
-  background: "#f7f7f5",
-  panel: "#ffffff",
-  panelAlt: "#fbfbfa",
-  border: "#e6e6e1",
-  text: "#191919",
-  muted: "#6b6b67",
-  subtle: "#8d8d88",
-  green: "#0f9d58",
-  red: "#d14343",
-  amber: "#b7791f",
-  blue: "#2f76ff",
-  gray: "#787774",
-};
-
-const stageMeta = {
-  red_team_attacking: "Red team generated telemetry",
-  log_monitoring: "Monitoring logs",
-  anomaly_detected: "Anomaly detected",
-  classified: "Incident classified",
-  awaiting_approval: "Awaiting approval",
-  action_executing: "Executing response",
-  mitigated: "Mitigated",
-  manual_queue: "Manual queue",
+  background: "#0c0c0d",
+  canvas: "#131314",
+  panel: "#131314",
+  panelAlt: "#1a1a1b",
+  border: "#232326",
+  text: "#f4f4f5",
+  muted: "#a1a1aa",
+  subtle: "#71717a",
+  green: "#34d399",
+  red: "#f87171",
+  amber: "#f59e0b",
+  blue: "#8b5cf6",
+  gold: "#a78bfa",
+  ink: "#09090b",
 };
 
 const severityColors = {
@@ -35,6 +27,12 @@ const severityColors = {
   HIGH: "#d9730d",
   MEDIUM: colors.amber,
   LOW: colors.green,
+};
+
+const policyColors = {
+  auto_execute: colors.green,
+  approval_required: colors.amber,
+  manual_escalation: colors.red,
 };
 
 function authHeaders(token) {
@@ -64,13 +62,14 @@ function StatusPill({ color, children }) {
         display: "inline-flex",
         alignItems: "center",
         gap: 6,
-        padding: "6px 10px",
+        padding: "7px 12px",
         borderRadius: 999,
         border: `1px solid ${color}`,
         background: `${color}12`,
         color,
         fontSize: 12,
-        fontWeight: 600,
+        fontWeight: 700,
+        textTransform: "capitalize",
       }}
     >
       {children}
@@ -78,15 +77,28 @@ function StatusPill({ color, children }) {
   );
 }
 
-function Section({ title, eyebrow, children }) {
+function Section({ title, eyebrow, right, children }) {
   return (
     <section style={sectionStyle}>
-      <div style={{ marginBottom: 16 }}>
-        {eyebrow ? <div style={eyebrowStyle}>{eyebrow}</div> : null}
-        <div style={{ fontSize: 18, fontWeight: 650 }}>{title}</div>
+      <div style={sectionHeaderStyle}>
+        <div>
+          {eyebrow ? <div style={eyebrowStyle}>{eyebrow}</div> : null}
+          <div style={{ fontSize: 20, fontWeight: 700 }}>{title}</div>
+        </div>
+        {right}
       </div>
       {children}
     </section>
+  );
+}
+
+function StatCard({ label, value, hint }) {
+  return (
+    <div style={statCardStyle}>
+      <div style={eyebrowStyle}>{label}</div>
+      <div style={{ fontSize: 28, fontWeight: 700, margin: "6px 0 4px" }}>{value}</div>
+      <div style={{ color: colors.subtle, fontSize: 12 }}>{hint}</div>
+    </div>
   );
 }
 
@@ -94,30 +106,46 @@ function Field({ label, value, accent }) {
   return (
     <div>
       <div style={eyebrowStyle}>{label}</div>
-      <div style={{ color: accent || colors.text, fontWeight: 600, lineHeight: 1.5 }}>{value}</div>
-    </div>
-  );
-}
-
-function LogBlock({ title, lines }) {
-  if (!lines || !lines.length) {
-    return null;
-  }
-  return (
-    <div style={{ marginTop: 14 }}>
-      <div style={eyebrowStyle}>{title}</div>
-      <div style={monoBoxStyle}>
-        {lines.map((line, index) => (
-          <div key={`${title}-${index}`} style={{ marginBottom: index === lines.length - 1 ? 0 : 8 }}>
-            {line}
-          </div>
-        ))}
+      <div style={{ color: accent || colors.text, fontWeight: 600, lineHeight: 1.5, wordBreak: "break-word" }}>
+        {value || "—"}
       </div>
     </div>
   );
 }
 
-export default function App() {
+function EmptyState({ title, body }) {
+  return (
+    <div style={{ padding: 20, border: `1px dashed ${colors.border}`, borderRadius: 20, color: colors.muted }}>
+      <div style={{ fontWeight: 700, marginBottom: 6 }}>{title}</div>
+      <div style={{ lineHeight: 1.6 }}>{body}</div>
+    </div>
+  );
+}
+
+function IconButton({ onClick, children, active = false, title }) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      style={{
+        width: 38,
+        height: 38,
+        borderRadius: 14,
+        border: `1px solid ${active ? "#3b2a47" : colors.border}`,
+        background: active ? "rgba(167, 139, 250, 0.12)" : colors.panelAlt,
+        color: active ? colors.text : colors.muted,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        cursor: "pointer",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function App() {
   const [mode, setMode] = useState("login");
   const [token, setToken] = useState(localStorage.getItem(TOKEN_KEY) || "");
   const [user, setUser] = useState(null);
@@ -126,29 +154,57 @@ export default function App() {
   const [incidents, setIncidents] = useState({});
   const [selectedIncidentId, setSelectedIncidentId] = useState("");
   const [feed, setFeed] = useState([]);
+  const [telemetry, setTelemetry] = useState({ total_events: 0, counts: {}, recent_events: [] });
+  const [observability, setObservability] = useState({
+    enabled: false,
+    metrics: { event_type_counts: {}, failed_auth_events: 0, tool_executions: 0, incidents_detected: 0 },
+    recent_spans: [],
+    recent_alerts: [],
+    latest_tool: {},
+  });
+  const [analytics, setAnalytics] = useState({ totals: {}, by_class: {}, by_severity: {}, by_status: {} });
+  const [jobs, setJobs] = useState([]);
+  const [integration, setIntegration] = useState(null);
   const [connected, setConnected] = useState(false);
   const [autoRunning, setAutoRunning] = useState(false);
   const [decisionLoading, setDecisionLoading] = useState({});
+  const [copyFeedback, setCopyFeedback] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const reconnectRef = useRef(null);
+  const notificationsRef = useRef(null);
+  const profileMenuRef = useRef(null);
 
-  const [authForm, setAuthForm] = useState({
-    name: "",
-    email: "",
-    password: "",
-  });
-  const [websiteForm, setWebsiteForm] = useState({
-    name: "",
-    domain: "",
-    environment: "development",
-  });
+  const [authForm, setAuthForm] = useState({ name: "", email: "", password: "" });
+  const [websiteForm, setWebsiteForm] = useState({ name: "", domain: "", environment: "production" });
+  const [currentTab, setCurrentTab] = useState("dashboard");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [severityFilter, setSeverityFilter] = useState("all");
+  const [approvalFilter, setApprovalFilter] = useState("all");
+  const [noteDraft, setNoteDraft] = useState("");
+  const [notesSaving, setNotesSaving] = useState(false);
+  const [assigneeDraft, setAssigneeDraft] = useState("");
+  const [assigning, setAssigning] = useState(false);
+  const [incidentView, setIncidentView] = useState("discussion");
 
   useEffect(() => {
     if (!token) {
       setUser(null);
       setWebsites([]);
       setSelectedWebsiteId("");
+      setTelemetry({ total_events: 0, counts: {}, recent_events: [] });
+      setAnalytics({ totals: {}, by_class: {}, by_severity: {}, by_status: {} });
+      setJobs([]);
+      setObservability({
+        enabled: false,
+        metrics: { event_type_counts: {}, failed_auth_events: 0, tool_executions: 0, incidents_detected: 0 },
+        recent_spans: [],
+        recent_alerts: [],
+        latest_tool: {},
+      });
       return;
     }
 
@@ -163,8 +219,7 @@ export default function App() {
         }
         setUser(me.user);
         setWebsites(websiteList);
-        const firstWebsite = websiteList[0]?._id || "";
-        setSelectedWebsiteId((current) => current || firstWebsite);
+        setSelectedWebsiteId((current) => current || websiteList[0]?._id || "");
       } catch (err) {
         localStorage.removeItem(TOKEN_KEY);
         setToken("");
@@ -181,6 +236,34 @@ export default function App() {
     };
   }, [token]);
 
+  async function loadSelectedWebsiteData(websiteId, activeToken) {
+    if (!websiteId || !activeToken) {
+      return null;
+    }
+    const [websiteIncidents, telemetryData, observabilityData, integrationData, analyticsData, jobsData] = await Promise.all([
+      apiFetch(`/websites/${websiteId}/incidents`, {}, activeToken),
+      apiFetch(`/websites/${websiteId}/telemetry`, {}, activeToken),
+      apiFetch(`/websites/${websiteId}/observability`, {}, activeToken),
+      apiFetch(`/websites/${websiteId}/integration`, {}, activeToken),
+      apiFetch(`/websites/${websiteId}/analytics`, {}, activeToken),
+      apiFetch(`/websites/${websiteId}/jobs`, {}, activeToken),
+    ]);
+    setIncidents((current) => {
+      const next = { ...current };
+      websiteIncidents.forEach((incident) => {
+        next[incident.attack_id] = incident;
+      });
+      return next;
+    });
+    setTelemetry(telemetryData);
+    setObservability(observabilityData);
+    setIntegration(integrationData);
+    setAnalytics(analyticsData);
+    setJobs(jobsData);
+    setSelectedIncidentId((current) => current || websiteIncidents[0]?.attack_id || "");
+    return { websiteIncidents, telemetryData, observabilityData, integrationData, analyticsData, jobsData };
+  }
+
   useEffect(() => {
     let socket;
     const connect = () => {
@@ -188,14 +271,6 @@ export default function App() {
       socket.onopen = () => setConnected(true);
       socket.onmessage = (event) => {
         const payload = JSON.parse(event.data);
-        const entry = {
-          id: `${Date.now()}-${Math.random()}`,
-          timestamp: new Date().toISOString(),
-          type: payload.type,
-          data: payload.data,
-        };
-        setFeed((current) => [entry, ...current].slice(0, 50));
-
         if (payload.type === "init") {
           const mapped = {};
           (payload.data.incidents || []).forEach((incident) => {
@@ -203,9 +278,29 @@ export default function App() {
           });
           setIncidents(mapped);
           setAutoRunning(Boolean(payload.data.running));
+          return;
         }
 
-        if (payload.type === "red_team_attack" || payload.type === "agent_update" || payload.type === "incident_resolved") {
+        const entry = {
+          id: `${Date.now()}-${Math.random()}`,
+          timestamp: new Date().toISOString(),
+          type: payload.type,
+          data: payload.data,
+        };
+        setFeed((current) => [entry, ...current].slice(0, 80));
+
+        if (payload.type === "telemetry_update" && payload.data?.website_id === selectedWebsiteId && payload.data?.telemetry) {
+          setTelemetry(payload.data.telemetry);
+          if (payload.data.observability) {
+            setObservability(payload.data.observability);
+          }
+        }
+
+        if (payload.type === "observability_update" && payload.data?.website_id === selectedWebsiteId && payload.data?.observability) {
+          setObservability(payload.data.observability);
+        }
+
+        if (payload.data?.attack_id) {
           setIncidents((current) => {
             const existing = current[payload.data.attack_id] || {};
             return {
@@ -213,7 +308,29 @@ export default function App() {
               [payload.data.attack_id]: {
                 ...existing,
                 ...payload.data,
+                attack_id: payload.data.attack_id,
                 simulation: payload.data.simulation || existing.simulation,
+                telemetry: payload.data.telemetry || existing.telemetry,
+                anomaly: payload.data.anomaly || existing.anomaly,
+                correlation: payload.data.correlation || existing.correlation,
+                classification: payload.data.classification || existing.classification,
+                challenge_review: payload.data.challenge_review || existing.challenge_review,
+                investigation: payload.data.investigation || existing.investigation,
+                mitigation_plan: payload.data.mitigation_plan || existing.mitigation_plan,
+                policy_decision: payload.data.policy_decision || existing.policy_decision,
+                approval_status: payload.data.approval_status || existing.approval_status,
+                assignee: payload.data.assignee || existing.assignee,
+                notes: payload.data.notes || existing.notes,
+                action_result: payload.data.action_result || existing.action_result,
+                incident_report: payload.data.incident_report || existing.incident_report,
+                agent_trace: payload.data.agent_trace || existing.agent_trace,
+                agent_messages: payload.data.agent_messages || existing.agent_messages,
+                agent_discussion: payload.data.agent_discussion || existing.agent_discussion,
+                protocol_trace: payload.data.protocol_trace || existing.protocol_trace,
+                tool_trace: payload.data.tool_trace || existing.tool_trace,
+                runtime_metadata: payload.data.runtime_metadata || existing.runtime_metadata,
+                llm_usage: payload.data.llm_usage || existing.llm_usage,
+                current_stage: payload.data.current_stage || existing.current_stage,
               },
             };
           });
@@ -245,50 +362,186 @@ export default function App() {
       return;
     }
     let cancelled = false;
-    async function loadIncidents() {
+
+    async function loadWebsiteData() {
       try {
-        const websiteIncidents = await apiFetch(`/websites/${selectedWebsiteId}/incidents`, {}, token);
+        const result = await loadSelectedWebsiteData(selectedWebsiteId, token);
         if (cancelled) {
           return;
         }
-        setIncidents((current) => {
-          const next = { ...current };
-          websiteIncidents.forEach((incident) => {
-            next[incident.attack_id] = incident;
-          });
-          return next;
-        });
-        setSelectedIncidentId((current) => current || websiteIncidents[0]?.attack_id || "");
+        if (!result) {
+          return;
+        }
       } catch (err) {
         setError(err.message);
       }
     }
-    loadIncidents();
+
+    loadWebsiteData();
     return () => {
       cancelled = true;
     };
   }, [selectedWebsiteId, token]);
+
+  useEffect(() => {
+    function handlePointerDown(event) {
+      if (showNotifications && notificationsRef.current && !notificationsRef.current.contains(event.target)) {
+        setShowNotifications(false);
+      }
+      if (showProfileMenu && profileMenuRef.current && !profileMenuRef.current.contains(event.target)) {
+        setShowProfileMenu(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [showNotifications, showProfileMenu]);
 
   const selectedWebsite = websites.find((website) => website._id === selectedWebsiteId) || null;
   const websiteIncidents = useMemo(
     () =>
       Object.values(incidents)
         .filter((incident) => incident.website_id === selectedWebsiteId)
+        .filter((incident) => severityFilter === "all" || incident.classification?.attack?.severity === severityFilter)
+        .filter((incident) => approvalFilter === "all" || incident.approval_status === approvalFilter)
+        .filter((incident) => {
+          if (!searchTerm.trim()) {
+            return true;
+          }
+          const haystack = JSON.stringify({
+            attackId: incident.attack_id,
+            attackClass: incident.classification?.predicted_class,
+            source: incident.classification?.attack?.primary_src_ip,
+            target: incident.classification?.attack?.target_ip,
+            description: incident.simulation?.description,
+          }).toLowerCase();
+          return haystack.includes(searchTerm.trim().toLowerCase());
+        })
         .sort((a, b) => (b.simulation?.timestamp || "").localeCompare(a.simulation?.timestamp || "")),
-    [incidents, selectedWebsiteId]
+    [incidents, selectedWebsiteId, severityFilter, approvalFilter, searchTerm]
   );
   const selectedIncident =
     websiteIncidents.find((incident) => incident.attack_id === selectedIncidentId) || websiteIncidents[0] || null;
-  const selectedAttack = selectedIncident?.classification?.attack;
 
-  const stats = useMemo(() => {
-    return {
-      total: websiteIncidents.length,
-      pending: websiteIncidents.filter((incident) => incident.approval_status === "pending").length,
-      mitigated: websiteIncidents.filter((incident) => incident.action_result?.status === "MITIGATED").length,
+  useEffect(() => {
+    setAssigneeDraft(selectedIncident?.assignee?.name || "");
+  }, [selectedIncident?.attack_id, selectedIncident?.assignee?.name]);
+
+  const visibleAgentTrace = useMemo(() => {
+    if (!selectedIncident) {
+      return [];
+    }
+    if ((selectedIncident.agent_trace || []).length) {
+      return selectedIncident.agent_trace;
+    }
+    return (selectedIncident.tool_trace || []).map((entry) => ({
+      agent: entry.llm_agent || entry.agent,
+      stage: entry.output_summary?.current_stage || entry.tool,
+      summary: entry.llm_used
+        ? `${entry.llm_agent || entry.agent} used ${entry.tool} with Gemini-backed reasoning.`
+        : `${entry.agent} executed ${entry.tool} through the MCP tool runtime.`,
+      details: {
+        tool: entry.tool,
+        llm_runtime: entry.llm_runtime,
+      },
+    }));
+  }, [selectedIncident]);
+
+  const visibleAgentMessages = useMemo(() => {
+    if (!selectedIncident) {
+      return [];
+    }
+    if ((selectedIncident.agent_messages || []).length) {
+      return selectedIncident.agent_messages;
+    }
+    return (selectedIncident.tool_trace || []).map((entry, index, items) => {
+      const next = items[index + 1];
+      return {
+        from: entry.llm_agent || entry.agent,
+        to: next ? next.llm_agent || next.agent : "Dashboard",
+        subject: entry.prompt_profile?.purpose || "Agent handoff",
+        content: entry.llm_used
+          ? `${entry.llm_agent || entry.agent} completed a Gemini-backed reasoning step and passed the updated incident state forward.`
+          : `${entry.agent} finished ${entry.tool} and passed the structured result to the next stage.`,
+        artifacts: {
+          tool: entry.tool,
+          current_stage: entry.output_summary?.current_stage,
+        },
+      };
+    });
+  }, [selectedIncident]);
+
+  const visibleDiscussion = useMemo(() => {
+    if (!selectedIncident) {
+      return [];
+    }
+    if ((selectedIncident.agent_discussion || []).length) {
+      return selectedIncident.agent_discussion;
+    }
+    const discussion = [];
+    (selectedIncident.agent_trace || []).forEach((entry) => {
+      discussion.push({
+        speaker: entry.agent,
+        audience: null,
+        message: entry.summary,
+        stage: entry.stage,
+        kind: "statement",
+      });
+    });
+    if (!discussion.length) {
+      (selectedIncident.tool_trace || []).forEach((entry, index, items) => {
+        const next = items[index + 1];
+        discussion.push({
+          speaker: entry.llm_agent || entry.agent,
+          audience: next ? next.llm_agent || next.agent : "SOC Dashboard",
+          message: entry.llm_used
+            ? `I completed ${entry.tool} using Gemini-backed reasoning. Please take the updated state and continue the investigation.`
+            : `I completed ${entry.tool} using deterministic logic. Please continue with the updated incident state.`,
+          stage: entry.output_summary?.current_stage || entry.tool,
+          kind: "handoff",
+        });
+      });
+    }
+    return discussion;
+  }, [selectedIncident]);
+
+  const stats = useMemo(
+    () => ({
+      incidents: websiteIncidents.length,
+      autoExecuted: websiteIncidents.filter((incident) => incident.action_result?.execution_mode === "AUTONOMOUS").length,
+      approvals: websiteIncidents.filter((incident) => incident.policy_decision?.mode === "approval_required").length,
       critical: websiteIncidents.filter((incident) => incident.classification?.attack?.severity === "CRITICAL").length,
-    };
-  }, [websiteIncidents]);
+    }),
+    [websiteIncidents]
+  );
+
+  const topAttackClasses = useMemo(
+    () =>
+      Object.entries(analytics.by_class || {})
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 4),
+    [analytics]
+  );
+
+  const recentJobs = useMemo(() => (jobs || []).slice(0, 5), [jobs]);
+
+  const notificationItems = useMemo(() => {
+    const items = [];
+    const pending = websiteIncidents.filter((incident) => incident.approval_status === "pending").length;
+    if (pending) {
+      items.push({
+        title: `${pending} pending approval${pending > 1 ? "s" : ""}`,
+        detail: "Containment is waiting for analyst approval.",
+      });
+    }
+    feed.slice(0, 4).forEach((entry) => {
+      items.push({
+        title: entry.data.agent_trace_entry?.agent || entry.type,
+        detail: entry.data.message || entry.data.current_stage || "New orchestration activity.",
+      });
+    });
+    return items.slice(0, 5);
+  }, [feed, websiteIncidents]);
 
   async function submitAuth(targetMode) {
     try {
@@ -328,19 +581,7 @@ export default function App() {
       );
       setWebsites((current) => [...current, website]);
       setSelectedWebsiteId(website._id);
-      setWebsiteForm({ name: "", domain: "", environment: "development" });
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function connectDemo(websiteId) {
-    try {
-      setLoading(true);
-      const website = await apiFetch(`/websites/${websiteId}/connect-demo`, { method: "POST" }, token);
-      setWebsites((current) => current.map((item) => (item._id === websiteId ? website : item)));
+      setWebsiteForm({ name: "", domain: "", environment: "production" });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -355,6 +596,7 @@ export default function App() {
     try {
       setError("");
       await apiFetch(`/websites/${selectedWebsiteId}/simulate`, { method: "POST" }, token);
+      await loadSelectedWebsiteData(selectedWebsiteId, token);
     } catch (err) {
       setError(err.message);
     }
@@ -368,12 +610,13 @@ export default function App() {
       const endpoint = autoRunning ? `/websites/${selectedWebsiteId}/monitor/stop` : `/websites/${selectedWebsiteId}/monitor/start`;
       const data = await apiFetch(endpoint, { method: "POST" }, token);
       setAutoRunning(Boolean(data.running));
+      await loadSelectedWebsiteData(selectedWebsiteId, token);
     } catch (err) {
       setError(err.message);
     }
   }
 
-  async function approveIncident(decision) {
+  async function decideIncident(decision) {
     if (!selectedIncident) {
       return;
     }
@@ -385,10 +628,73 @@ export default function App() {
         token
       );
       setIncidents((current) => ({ ...current, [updated.simulation.attack_id]: updated }));
+      await loadSelectedWebsiteData(selectedWebsiteId, token);
     } catch (err) {
       setError(err.message);
     } finally {
       setDecisionLoading((current) => ({ ...current, [selectedIncident.attack_id]: false }));
+    }
+  }
+
+  async function addIncidentNote() {
+    if (!selectedIncident || !noteDraft.trim()) {
+      return;
+    }
+    try {
+      setNotesSaving(true);
+      const notes = await apiFetch(
+        `/incidents/${selectedIncident.attack_id}/notes`,
+        { method: "POST", body: JSON.stringify({ note: noteDraft.trim() }) },
+        token
+      );
+      setIncidents((current) => ({
+        ...current,
+        [selectedIncident.attack_id]: {
+          ...(current[selectedIncident.attack_id] || {}),
+          notes,
+        },
+      }));
+      await loadSelectedWebsiteData(selectedWebsiteId, token);
+      setNoteDraft("");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setNotesSaving(false);
+    }
+  }
+
+  async function assignIncident() {
+    if (!selectedIncident || !assigneeDraft.trim()) {
+      return;
+    }
+    try {
+      setAssigning(true);
+      const updated = await apiFetch(
+        `/incidents/${selectedIncident.attack_id}/assign`,
+        { method: "POST", body: JSON.stringify({ assignee: assigneeDraft.trim() }) },
+        token
+      );
+      setIncidents((current) => ({ ...current, [selectedIncident.attack_id]: updated }));
+      await loadSelectedWebsiteData(selectedWebsiteId, token);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setAssigning(false);
+    }
+  }
+
+  async function copyCollectorToken() {
+    const tokenToCopy = selectedWebsite?.collector?.ingest_token;
+    if (!tokenToCopy) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(tokenToCopy);
+      setCopyFeedback("Copied");
+      window.setTimeout(() => setCopyFeedback(""), 1800);
+    } catch (_error) {
+      setCopyFeedback("Copy failed");
+      window.setTimeout(() => setCopyFeedback(""), 1800);
     }
   }
 
@@ -400,58 +706,123 @@ export default function App() {
     setSelectedWebsiteId("");
     setSelectedIncidentId("");
     setIncidents({});
+    setFeed([]);
+    setAnalytics({ totals: {}, by_class: {}, by_severity: {}, by_status: {} });
+    setJobs([]);
+    setObservability({
+      enabled: false,
+      metrics: { event_type_counts: {}, failed_auth_events: 0, tool_executions: 0, incidents_detected: 0 },
+      recent_spans: [],
+      recent_alerts: [],
+      latest_tool: {},
+    });
+    setIntegration(null);
+    setShowNotifications(false);
+    setShowProfileMenu(false);
   }
 
   if (!user) {
     return (
       <div style={pageStyle}>
-        <div style={heroWrapStyle}>
-          <div style={{ maxWidth: 560 }}>
-            <div style={eyebrowStyle}>CyberAgent</div>
-            <div style={{ fontSize: 42, fontWeight: 700, letterSpacing: -1, marginBottom: 14 }}>
-              Multi-agent website security, with a demo site you can plug in now.
+        <div style={landingGlowWrapStyle}>
+          <div style={landingGlowPrimaryStyle} />
+          <div style={landingGlowSecondaryStyle} />
+        </div>
+
+        <div style={landingShellStyle}>
+          <header style={landingHeaderStyle}>
+            <div style={landingBrandStyle}>
+              <div style={landingBrandMarkStyle}>C</div>
+              <div>
+                <div style={landingBrandNameStyle}>CyberAgent</div>
+                <div style={landingBrandSubStyle}>Autonomous AI SOC for startups</div>
+              </div>
             </div>
-            <div style={{ color: colors.muted, fontSize: 16, lineHeight: 1.7 }}>
-              Sign up, connect a website project, and watch CyberAgent monitor telemetry, detect incidents, generate
-              mitigation plans, and walk you through approval-gated response.
+            <nav style={landingNavStyle}>
+              <span>How it works</span>
+              <span>Features</span>
+              <span>Security</span>
+              <span>Reviews</span>
+            </nav>
+          </header>
+
+          <div style={heroWrapStyle}>
+            <div style={{ maxWidth: 700 }}>
+              <div style={landingBadgeStyle}>Featured architecture: hybrid AI + SOC automation</div>
+              <div style={heroTitleStyle}>
+                Multi-agent cyber defense for modern startups and customer-facing applications.
+              </div>
+              <div style={heroBodyStyle}>
+                Ingest application, authentication, and network telemetry into one autonomous platform that
+                detects threats, coordinates specialist agents, and keeps humans in control only when response
+                risk is high.
+              </div>
+              <div style={heroBadgeRowStyle}>
+                <StatusPill color={colors.green}>Collector-based onboarding</StatusPill>
+                <StatusPill color={colors.blue}>Agent-to-agent handoffs</StatusPill>
+                <StatusPill color={colors.amber}>70% automation, 30% oversight</StatusPill>
+              </div>
+              <div style={landingStatRowStyle}>
+                <div style={landingStatStyle}>
+                  <div style={landingStatValueStyle}>3</div>
+                  <div style={landingStatLabelStyle}>Telemetry channels</div>
+                </div>
+                <div style={landingStatStyle}>
+                  <div style={landingStatValueStyle}>9</div>
+                  <div style={landingStatLabelStyle}>Agent stages</div>
+                </div>
+                <div style={landingStatStyle}>
+                  <div style={landingStatValueStyle}>Live</div>
+                  <div style={landingStatLabelStyle}>SOC dashboard</div>
+                </div>
+              </div>
+            </div>
+
+            <div style={authCardStyle}>
+              <div style={authCardHeaderStyle}>
+                <div style={{ display: "flex", gap: 10 }}>
+                  <button onClick={() => setMode("login")} style={mode === "login" ? primaryButtonStyle : secondaryButtonStyle}>
+                    Log in
+                  </button>
+                  <button onClick={() => setMode("signup")} style={mode === "signup" ? primaryButtonStyle : secondaryButtonStyle}>
+                    Sign up
+                  </button>
+                </div>
+                <div style={authCardSubStyle}>
+                  {mode === "signup" ? "Create your protected workspace" : "Access your SOC workspace"}
+                </div>
+              </div>
+              {mode === "signup" ? (
+                <input
+                  value={authForm.name}
+                  onChange={(event) => setAuthForm((current) => ({ ...current, name: event.target.value }))}
+                  placeholder="Full name"
+                  style={inputStyle}
+                />
+              ) : null}
+              <input
+                value={authForm.email}
+                onChange={(event) => setAuthForm((current) => ({ ...current, email: event.target.value }))}
+                placeholder="Work email"
+                style={inputStyle}
+              />
+              <input
+                type="password"
+                value={authForm.password}
+                onChange={(event) => setAuthForm((current) => ({ ...current, password: event.target.value }))}
+                placeholder="Password"
+                style={inputStyle}
+              />
+              {error ? <div style={errorStyle}>{error}</div> : null}
+              <button onClick={() => submitAuth(mode)} style={primaryButtonStyle} disabled={loading}>
+                {loading ? "Working..." : mode === "signup" ? "Create workspace" : "Enter dashboard"}
+              </button>
             </div>
           </div>
 
-          <div style={authCardStyle}>
-            <div style={{ display: "flex", gap: 10, marginBottom: 18 }}>
-              <button onClick={() => setMode("login")} style={mode === "login" ? primaryButtonStyle : secondaryButtonStyle}>
-                Log in
-              </button>
-              <button onClick={() => setMode("signup")} style={mode === "signup" ? primaryButtonStyle : secondaryButtonStyle}>
-                Sign up
-              </button>
-            </div>
-            {mode === "signup" ? (
-              <input
-                value={authForm.name}
-                onChange={(event) => setAuthForm((current) => ({ ...current, name: event.target.value }))}
-                placeholder="Name"
-                style={inputStyle}
-              />
-            ) : null}
-            <input
-              value={authForm.email}
-              onChange={(event) => setAuthForm((current) => ({ ...current, email: event.target.value }))}
-              placeholder="Email"
-              style={inputStyle}
-            />
-            <input
-              type="password"
-              value={authForm.password}
-              onChange={(event) => setAuthForm((current) => ({ ...current, password: event.target.value }))}
-              placeholder="Password"
-              style={inputStyle}
-            />
-            {error ? <div style={errorStyle}>{error}</div> : null}
-            <button onClick={() => submitAuth(mode)} style={primaryButtonStyle} disabled={loading}>
-              {loading ? "Working..." : mode === "signup" ? "Create account" : "Log in"}
-            </button>
-          </div>
+          <footer style={landingFooterStyle}>
+            <span>Integrates with startup web apps, auth services, collector agents, and network telemetry pipelines</span>
+          </footer>
         </div>
       </div>
     );
@@ -460,461 +831,1150 @@ export default function App() {
   if (!websites.length) {
     return (
       <div style={pageStyle}>
+        <div style={landingGlowWrapStyle}>
+          <div style={landingGlowPrimaryStyle} />
+          <div style={landingGlowSecondaryStyle} />
+        </div>
         <div style={topBarStyle}>
           <div>
-            <div style={eyebrowStyle}>Welcome</div>
+            <div style={eyebrowStyle}>Workspace setup</div>
             <div style={{ fontSize: 30, fontWeight: 700 }}>{user.name}</div>
           </div>
           <button onClick={logout} style={secondaryButtonStyle}>
             Log out
           </button>
         </div>
-
-        <div style={setupCardStyle}>
-          <div style={eyebrowStyle}>Connect website</div>
-          <div style={{ fontSize: 28, fontWeight: 700, marginBottom: 10 }}>Create your first monitored website</div>
-          <div style={{ color: colors.muted, lineHeight: 1.7, marginBottom: 18 }}>
-            Phase 1 connects a demo website automatically. We’ll use this project to scope incidents, telemetry, and
-            monitoring to your account.
+        <div style={setupSplitStyle}>
+          <div style={setupIntroStyle}>
+            <div style={landingBadgeStyle}>Protected project onboarding</div>
+            <div style={{ fontSize: 48, lineHeight: 1.05, fontWeight: 800, marginBottom: 16 }}>
+              Create the first monitored application in your SOC workspace.
+            </div>
+            <div style={{ color: colors.muted, lineHeight: 1.8, fontSize: 17 }}>
+              We’ll provision a tenant-scoped project, generate a collector token, enable telemetry ingestion,
+              and prepare the full multi-agent response workflow for live incidents.
+            </div>
           </div>
-          <div style={formGridStyle}>
-            <input
-              value={websiteForm.name}
-              onChange={(event) => setWebsiteForm((current) => ({ ...current, name: event.target.value }))}
-              placeholder="Website name"
-              style={inputStyle}
-            />
-            <input
-              value={websiteForm.domain}
-              onChange={(event) => setWebsiteForm((current) => ({ ...current, domain: event.target.value }))}
-              placeholder="Website domain"
-              style={inputStyle}
-            />
-            <input
-              value={websiteForm.environment}
-              onChange={(event) => setWebsiteForm((current) => ({ ...current, environment: event.target.value }))}
-              placeholder="Environment"
-              style={inputStyle}
-            />
+          <div style={setupCardStyle}>
+            <div style={eyebrowStyle}>Protected project</div>
+            <div style={{ fontSize: 28, fontWeight: 700, marginBottom: 12 }}>Project details</div>
+            <div style={formGridStyle}>
+              <input
+                value={websiteForm.name}
+                onChange={(event) => setWebsiteForm((current) => ({ ...current, name: event.target.value }))}
+                placeholder="Project name"
+                style={inputStyle}
+              />
+              <input
+                value={websiteForm.domain}
+                onChange={(event) => setWebsiteForm((current) => ({ ...current, domain: event.target.value }))}
+                placeholder="Domain"
+                style={inputStyle}
+              />
+              <input
+                value={websiteForm.environment}
+                onChange={(event) => setWebsiteForm((current) => ({ ...current, environment: event.target.value }))}
+                placeholder="Environment"
+                style={inputStyle}
+              />
+            </div>
+            {error ? <div style={errorStyle}>{error}</div> : null}
+            <button onClick={createWebsite} style={primaryButtonStyle} disabled={loading}>
+              {loading ? "Creating..." : "Create protected project"}
+            </button>
           </div>
-          {error ? <div style={errorStyle}>{error}</div> : null}
-          <button onClick={createWebsite} style={primaryButtonStyle} disabled={loading}>
-            {loading ? "Creating..." : "Create and connect demo website"}
-          </button>
         </div>
       </div>
     );
   }
 
   return (
-    <div style={pageStyle}>
-      <div style={topBarStyle}>
-        <div>
-          <div style={eyebrowStyle}>CyberAgent Dashboard</div>
-          <div style={{ fontSize: 30, fontWeight: 700, marginBottom: 6 }}>Welcome back, {user.name}</div>
-          <div style={{ color: colors.muted }}>Manage websites, monitor telemetry, and review incidents.</div>
+    <div className="dashboard-layout">
+      <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
+        <div className="sidebar-header">
+          <ShieldAlert className="sidebar-logo" size={28} />
+          {!sidebarCollapsed && <div className="sidebar-title">CyberAgent SOC</div>}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <StatusPill color={connected ? colors.green : colors.red}>{connected ? "Live" : "Offline"}</StatusPill>
-          <button onClick={logout} style={secondaryButtonStyle}>
-            Log out
+        <div className="sidebar-nav">
+          <button className={`nav-item ${currentTab === 'dashboard' ? 'active' : ''}`} onClick={() => setCurrentTab('dashboard')}>
+            <LayoutDashboard className="nav-item-icon" size={20} />
+            {!sidebarCollapsed && <span>Dashboard</span>}
+          </button>
+          <button className={`nav-item ${currentTab === 'telemetry' ? 'active' : ''}`} onClick={() => setCurrentTab('telemetry')}>
+            <Activity className="nav-item-icon" size={20} />
+            {!sidebarCollapsed && <span>Telemetry & Lab</span>}
+          </button>
+          <button className={`nav-item ${currentTab === 'incidents' ? 'active' : ''}`} onClick={() => setCurrentTab('incidents')}>
+            <ShieldAlert className="nav-item-icon" size={20} />
+            {!sidebarCollapsed && <span>Threat Detection</span>}
           </button>
         </div>
-      </div>
+        <div className="sidebar-footer">
+          <button className="nav-item" onClick={() => setCurrentTab('telemetry')}>
+            <Settings className="nav-item-icon" size={20} />
+            {!sidebarCollapsed && <span>Workspace Settings</span>}
+          </button>
+        </div>
+      </aside>
 
-      {error ? <div style={errorStyle}>{error}</div> : null}
-
-      <div style={mainGridStyle}>
-        <aside style={sidebarStyle}>
-          <Section title="Your websites" eyebrow="Connected projects">
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {websites.map((website) => (
-                <button
-                  key={website._id}
-                  onClick={() => setSelectedWebsiteId(website._id)}
-                  style={{
-                    ...websiteButtonStyle,
-                    background: selectedWebsiteId === website._id ? colors.panelAlt : colors.panel,
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
-                    <div style={{ fontWeight: 650 }}>{website.name}</div>
-                    <StatusPill color={website.status === "connected" ? colors.green : colors.amber}>
-                      {website.status}
-                    </StatusPill>
-                  </div>
-                  <div style={{ color: colors.muted, fontSize: 13 }}>{website.domain}</div>
-                  <div style={{ color: colors.subtle, fontSize: 12, marginTop: 4 }}>{website.environment}</div>
-                </button>
-              ))}
+      <main className="main-content">
+        <div className="topbar">
+          <div className="flex-gap">
+            <button className="btn btn-secondary" style={{padding: '8px', border: 'none'}} onClick={() => setSidebarCollapsed(!sidebarCollapsed)}>
+              {sidebarCollapsed ? <PanelLeftOpen size={20} /> : <PanelLeftClose size={20} />}
+            </button>
+            <div className="topbar-search">
+              <Search size={18} color="var(--text-subtle)" />
+              <input type="text" placeholder="Search incidents, IPs, policies..." value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} />
             </div>
-          </Section>
-
-          <Section title="Live feed" eyebrow="Realtime agent events">
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 360, overflowY: "auto" }}>
-              {feed
-                .filter((entry) => !selectedWebsiteId || entry.data.website_id === selectedWebsiteId || entry.type === "init")
-                .map((entry) => (
-                  <div key={entry.id} style={feedCardStyle}>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 6 }}>
-                      <div style={{ fontSize: 12, fontWeight: 600 }}>{entry.type}</div>
-                      <div style={{ fontSize: 11, color: colors.subtle }}>{new Date(entry.timestamp).toLocaleTimeString()}</div>
-                    </div>
-                    <div style={{ color: colors.muted, fontSize: 12, lineHeight: 1.5 }}>
-                      {entry.data.message || entry.data.current_stage || "Event received"}
+          </div>
+          <div className="flex-gap" style={{position: 'relative'}}>
+            <StatusPill color={connected ? "var(--color-green)" : "var(--color-red)"}>
+              {connected ? "Realtime Active" : "Disconnected"}
+            </StatusPill>
+            <div style={{position: 'relative'}} ref={notificationsRef}>
+              <IconButton
+                onClick={() => {
+                  setShowNotifications((current) => !current);
+                  setShowProfileMenu(false);
+                }}
+                active={showNotifications}
+                title="Notifications"
+              >
+                <Bell size={18} />
+              </IconButton>
+              {showNotifications ? (
+                <div style={menuPanelStyle}>
+                  <div style={menuPanelHeaderStyle}>Notifications</div>
+                  {notificationItems.length ? (
+                    notificationItems.map((item, index) => (
+                      <div key={`${item.title}-${index}`} style={menuItemStyle}>
+                        <div style={{fontWeight: 600, fontSize: 13, color: colors.text, marginBottom: 4}}>{item.title}</div>
+                        <div style={{fontSize: 12, color: colors.muted, lineHeight: 1.5}}>{item.detail}</div>
+                      </div>
+                    ))
+                  ) : (
+                    <div style={menuEmptyStyle}>No new notifications</div>
+                  )}
+                </div>
+              ) : null}
+            </div>
+            <div style={{position: 'relative'}} ref={profileMenuRef}>
+              <button
+                onClick={() => {
+                  setShowProfileMenu((current) => !current);
+                  setShowNotifications(false);
+                }}
+                style={profileButtonStyle}
+                title="Profile menu"
+              >
+                {user?.name?.charAt(0)?.toUpperCase() || 'A'}
+              </button>
+              {showProfileMenu ? (
+                <div style={{...menuPanelStyle, right: 0, width: 220}}>
+                  <div style={menuPanelHeaderStyle}>Signed in as</div>
+                  <div style={{padding: "0 14px 14px"}}>
+                    <div style={{fontWeight: 700, color: colors.text}}>{user?.name || "Analyst"}</div>
+                    <div style={{fontSize: 12, color: colors.muted, marginTop: 4}}>{user?.email || ""}</div>
+                    <div style={{fontSize: 12, color: colors.subtle, marginTop: 8, textTransform: "capitalize"}}>
+                      Role: {user?.role || "owner"}
                     </div>
                   </div>
-                ))}
+                  <button style={menuActionButtonStyle} onClick={logout}>
+                    Log out
+                  </button>
+                </div>
+              ) : null}
             </div>
-          </Section>
-        </aside>
+          </div>
+        </div>
 
-        <main style={{ minWidth: 0 }}>
+        <div className="content-scrollable">
+          {error ? <div style={errorStyle}>{error}</div> : null}
           {selectedWebsite ? (
             <>
-              <Section title={selectedWebsite.name} eyebrow="Connected website">
-                <div style={statsGridStyle}>
-                  <Field label="Domain" value={selectedWebsite.domain} />
-                  <Field label="Environment" value={selectedWebsite.environment} />
-                  <Field label="Connection type" value={selectedWebsite.connection_type} />
-                  <Field label="Status" value={selectedWebsite.status} accent={selectedWebsite.status === "connected" ? colors.green : colors.amber} />
-                </div>
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 18 }}>
-                  {selectedWebsite.status !== "connected" ? (
-                    <button onClick={() => connectDemo(selectedWebsite._id)} style={primaryButtonStyle}>
-                      Connect demo website
-                    </button>
-                  ) : null}
-                  <button onClick={simulateAttack} style={primaryButtonStyle}>
-                    Simulate attack
-                  </button>
-                  <button onClick={toggleAuto} style={secondaryButtonStyle}>
-                    {autoRunning ? "Stop auto monitor" : "Start auto monitor"}
-                  </button>
-                </div>
-              </Section>
-
-              <div style={miniStatsGridStyle}>
-                <StatCard label="Total incidents" value={stats.total} />
-                <StatCard label="Pending approval" value={stats.pending} />
-                <StatCard label="Mitigated" value={stats.mitigated} />
-                <StatCard label="Critical" value={stats.critical} />
-              </div>
-
-              <Section title="Incidents" eyebrow="Website incident queue">
-                <div style={{ display: "grid", gridTemplateColumns: "320px minmax(0, 1fr)", gap: 16 }}>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                    {websiteIncidents.map((incident) => (
-                      <button
-                        key={incident.attack_id}
-                        onClick={() => setSelectedIncidentId(incident.attack_id)}
-                        style={{
-                          ...websiteButtonStyle,
-                          background: selectedIncident?.attack_id === incident.attack_id ? colors.panelAlt : colors.panel,
-                        }}
-                      >
-                        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
-                          <div style={{ fontWeight: 650 }}>{incident.attack_id}</div>
-                          {incident.classification?.attack?.severity ? (
-                            <StatusPill color={severityColors[incident.classification.attack.severity]}>
-                              {incident.classification.attack.severity}
-                            </StatusPill>
-                          ) : null}
-                        </div>
-                        <div style={{ fontSize: 13, color: colors.muted, marginBottom: 4 }}>
-                          {incident.classification?.predicted_class || incident.simulation?.attack_profile?.attack_type || "Pending"}
-                        </div>
-                        <div style={{ fontSize: 12, color: colors.subtle }}>
-                          {stageMeta[incident.current_stage] || incident.current_stage}
-                        </div>
+              {currentTab === 'dashboard' && (
+                <div>
+                  <div className="flex-between" style={{marginBottom: 24}}>
+                    <div>
+                      <div className="card-title" style={{fontSize: 24}}>{selectedWebsite.name}</div>
+                      <div style={{color: 'var(--text-muted)'}}>{selectedWebsite.domain} • {selectedWebsite.environment}</div>
+                    </div>
+                    <div className="flex-gap">
+                      <button onClick={simulateAttack} className="btn btn-primary">Simulate Attack</button>
+                      <button onClick={toggleAuto} className={`btn ${autoRunning ? 'btn-danger' : 'btn-secondary'}`}>
+                        {autoRunning ? "Stop Monitor" : "Start Monitor"}
                       </button>
-                    ))}
-                    {!websiteIncidents.length ? (
-                      <div style={{ color: colors.muted }}>No incidents yet for this website.</div>
-                    ) : null}
+                    </div>
                   </div>
 
-                  <div>
-                    {!selectedIncident ? (
-                      <div style={emptyStateStyle}>Select an incident to inspect its flow.</div>
-                    ) : (
-                      <>
-                        <Section title="Red Team Agent" eyebrow="Generated telemetry">
-                          <div style={statsGridStyle}>
-                            <Field label="Scenario" value={selectedIncident.simulation.attack_profile.attack_type} />
-                            <Field label="Primary source" value={selectedIncident.simulation.attack_profile.primary_src_ip} />
-                            <Field
-                              label="Target"
-                              value={`${selectedIncident.simulation.attack_profile.target_ip}:${selectedIncident.simulation.attack_profile.target_port}`}
-                            />
-                            <Field label="Expected rate" value={`${selectedIncident.simulation.attack_profile.packet_rate}/sec`} />
+                  <div className="grid-metrics">
+                    <div className="card">
+                      <div className="card-header">
+                        <div className="card-title">Total Events</div>
+                        <Activity size={20} color={colors.gold} />
+                      </div>
+                      <div className="card-value">{telemetry.total_events || 0}</div>
+                      <div style={{color: 'var(--text-subtle)', fontSize: 13}}>Collector-fed data</div>
+                    </div>
+                    <div className="card">
+                      <div className="card-header">
+                        <div className="card-title">Incidents</div>
+                        <ShieldAlert size={20} color={colors.amber} />
+                      </div>
+                      <div className="card-value">{stats.incidents}</div>
+                      <div style={{color: 'var(--text-subtle)', fontSize: 13}}>Detected across project</div>
+                    </div>
+                    <div className="card">
+                      <div className="card-header">
+                        <div className="card-title">Auto-executed</div>
+                        <Settings size={20} color={colors.green} />
+                      </div>
+                      <div className="card-value">{stats.autoExecuted}</div>
+                      <div style={{color: 'var(--text-subtle)', fontSize: 13}}>Resolved autonomously</div>
+                    </div>
+                    <div className="card">
+                      <div className="card-header">
+                        <div className="card-title">Pending Approvals</div>
+                        <Bell size={20} color={colors.red} />
+                      </div>
+                      <div className="card-value">{stats.approvals}</div>
+                      <div style={{color: 'var(--text-subtle)', fontSize: 13}}>Queued for decision</div>
+                    </div>
+                  </div>
+
+                  <div className="grid-layout" style={{marginTop: 24}}>
+                    <div className="card">
+                      <div className="card-title" style={{marginBottom: 16}}>Incident Analytics</div>
+                      <div className="grid-metrics" style={{gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12, marginBottom: 16}}>
+                        <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                          <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>TOTAL INCIDENTS</div>
+                          <div style={{fontWeight: 700, fontSize: 18}}>{analytics.totals?.incidents || 0}</div>
+                        </div>
+                        <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                          <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>ANALYST NOTES</div>
+                          <div style={{fontWeight: 700, fontSize: 18}}>{analytics.totals?.notes || 0}</div>
+                        </div>
+                        <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                          <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>CRITICAL CASES</div>
+                          <div style={{fontWeight: 700, fontSize: 18}}>{analytics.by_severity?.CRITICAL || 0}</div>
+                        </div>
+                      </div>
+                      <div style={{display: 'grid', gap: 12}}>
+                        {topAttackClasses.length ? topAttackClasses.map(([label, count]) => (
+                          <div key={label} className="flex-between" style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <span style={{fontWeight: 600, fontSize: 13}}>{label}</span>
+                            <span style={{fontSize: 13, color: 'var(--text-muted)'}}>{count} cases</span>
                           </div>
-                          <div style={{ color: colors.muted, lineHeight: 1.7, marginTop: 14 }}>
-                            {selectedIncident.simulation.description}
+                        )) : (
+                          <div style={{color: 'var(--text-muted)', fontSize: 13}}>Attack-class analytics will appear once incidents accumulate.</div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="card">
+                      <div className="card-title" style={{marginBottom: 16}}>Pipeline Jobs</div>
+                      <div style={{display: 'grid', gap: 12}}>
+                        {recentJobs.length ? recentJobs.map((job) => (
+                          <div key={job._id} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div className="flex-between" style={{marginBottom: 6}}>
+                              <span style={{fontWeight: 600, fontSize: 13}}>{job.job_type.replace(/_/g, ' ')}</span>
+                              <span className={`status-pill ${job.status === 'completed' ? 'badge-green' : job.status === 'failed' ? 'badge-red' : job.status === 'awaiting_approval' ? 'badge-blue' : 'badge-amber'}`}>
+                                {job.status.replace(/_/g, ' ')}
+                              </span>
+                            </div>
+                            <div style={{fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6}}>
+                              Attack: {job.metadata?.attack_id || 'n/a'} • Phase: {job.metadata?.phase || 'queued'}
+                            </div>
+                            <div style={{fontSize: 12, color: 'var(--text-subtle)', marginTop: 6}}>
+                              Retries: {job.retry_count || 0} • Updated: {job.updated_at ? new Date(job.updated_at).toLocaleTimeString() : 'n/a'}
+                            </div>
+                            {job.error ? (
+                              <div style={{fontSize: 12, color: colors.red, marginTop: 6}}>{job.error}</div>
+                            ) : null}
                           </div>
-                          <LogBlock title="Access logs" lines={selectedIncident.simulation.telemetry.generated_logs.access} />
-                          <LogBlock title="Auth logs" lines={selectedIncident.simulation.telemetry.generated_logs.auth} />
-                          <LogBlock title="Network logs" lines={selectedIncident.simulation.telemetry.generated_logs.network} />
-                        </Section>
+                        )) : (
+                          <div style={{color: 'var(--text-muted)', fontSize: 13}}>Jobs will appear as collector ingests and incident workflows run.</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
 
-                        {selectedIncident.telemetry ? (
-                          <Section title="Log Monitor Agent" eyebrow="Telemetry ingestion">
-                            <div style={statsGridStyle}>
-                              <Field label="Observed logs" value={selectedIncident.telemetry.total_logs_observed} />
-                              <Field label="Access" value={selectedIncident.telemetry.log_counts.access} />
-                              <Field label="Auth" value={selectedIncident.telemetry.log_counts.auth} />
-                              <Field label="Network" value={selectedIncident.telemetry.log_counts.network} />
+                  <div className="grid-layout">
+                    <div className="card">
+                      <div className="card-title" style={{marginBottom: 16}}>Live Orchestration Feed</div>
+                      <div style={{display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 400, overflowY: 'auto'}}>
+                        {feed.filter(e => !selectedWebsiteId || e.data.website_id === selectedWebsiteId).map(entry => (
+                          <div key={entry.id} style={{padding: 12, background: 'rgba(255,255,255,0.03)', borderRadius: 8, borderLeft: `3px solid ${colors.gold}`}}>
+                            <div className="flex-between" style={{marginBottom: 6}}>
+                              <span style={{fontSize: 13, fontWeight: 600}}>{entry.data.agent_trace_entry?.agent || entry.type}</span>
+                              <span style={{fontSize: 11, color: 'var(--text-subtle)'}}>{new Date(entry.timestamp).toLocaleTimeString()}</span>
                             </div>
-                          </Section>
-                        ) : null}
+                            <div style={{fontSize: 13, color: 'var(--text-muted)'}}>{entry.data.message || entry.data.current_stage || "Event"}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="card">
+                      <div className="card-title" style={{marginBottom: 16}}>Projects</div>
+                      <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
+                        {websites.map(w => (
+                          <div key={w._id} className={`table-row-clickable ${selectedWebsiteId === w._id ? 'active' : ''}`} onClick={() => setSelectedWebsiteId(w._id)} style={{padding: 12, border: '1px solid var(--border-color)', borderRadius: 8, background: selectedWebsiteId === w._id ? 'var(--panel-alt)' : 'transparent'}}>
+                            <div className="flex-between" style={{marginBottom: 4}}>
+                              <span style={{fontWeight: 600}}>{w.name}</span>
+                              <StatusPill color={w.status === 'connected' ? 'var(--color-green)' : 'var(--color-amber)'}>{w.status}</StatusPill>
+                            </div>
+                            <div style={{fontSize: 12, color: 'var(--text-subtle)'}}>{w.domain}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
 
-                        {selectedIncident.anomaly ? (
-                          <Section title="Anomaly Detection Agent" eyebrow="Detection evidence">
-                            <div style={statsGridStyle}>
-                              <Field label="Anomaly type" value={selectedIncident.anomaly.anomaly_type} />
-                              <Field label="Primary source" value={selectedIncident.anomaly.primary_src_ip} />
-                              <Field
-                                label="Target"
-                                value={`${selectedIncident.anomaly.target_ip}:${selectedIncident.anomaly.target_port}`}
-                              />
-                              <Field label="Severity" value={selectedIncident.anomaly.severity} accent={severityColors[selectedIncident.anomaly.severity]} />
+                  <div className="grid-layout" style={{marginTop: 24}}>
+                    <div className="card">
+                      <div className="card-title" style={{marginBottom: 16}}>OpenTelemetry Monitor</div>
+                      <div className="grid-metrics" style={{gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12, marginBottom: 16}}>
+                        <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                          <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>APP LOGS</div>
+                          <div style={{fontWeight: 700, fontSize: 16}}>{observability.channels?.application_logs?.events_seen || 0}</div>
+                        </div>
+                        <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                          <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>AUTH LOGS</div>
+                          <div style={{fontWeight: 700, fontSize: 16}}>{observability.channels?.authentication_logs?.events_seen || 0}</div>
+                        </div>
+                        <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                          <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>NETWORK LOGS</div>
+                          <div style={{fontWeight: 700, fontSize: 16}}>{observability.channels?.network_logs?.events_seen || 0}</div>
+                        </div>
+                        <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                          <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>FAILED AUTH SIGNALS</div>
+                          <div style={{fontWeight: 700, fontSize: 16}}>{observability.metrics?.failed_auth_events || 0}</div>
+                        </div>
+                      </div>
+                      <div style={{display: 'grid', gap: 12}}>
+                        {(observability.recent_events || []).slice(0, 6).map((event, index) => (
+                          <div key={`${event.timestamp}-${index}`} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div className="flex-between" style={{marginBottom: 6}}>
+                              <span style={{fontWeight: 600, fontSize: 13}}>{event.title}</span>
+                              <span style={{fontSize: 12, color: 'var(--text-subtle)'}}>{new Date(event.timestamp).toLocaleTimeString()}</span>
                             </div>
-                            <div style={{ color: colors.muted, lineHeight: 1.7, marginTop: 14 }}>
-                              {selectedIncident.anomaly.summary}
+                            <div style={{fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6}}>
+                              {event.detail}
                             </div>
-                          </Section>
-                        ) : null}
-
-                        {selectedIncident.classification && selectedAttack ? (
-                          <Section title="Classification Agent" eyebrow="Incident context">
-                            <div style={statsGridStyle}>
-                              <Field label="Attack type" value={selectedIncident.classification.predicted_class} />
-                              <Field label="Confidence" value={`${(selectedIncident.classification.confidence * 100).toFixed(1)}%`} />
-                              <Field label="Risk score" value={selectedIncident.classification.risk_score} accent={colors.amber} />
-                              <Field label="Target" value={`${selectedAttack.target_ip}:${selectedAttack.target_port}`} />
-                            </div>
-                            <div style={{ marginTop: 14, color: colors.muted, lineHeight: 1.7 }}>
-                              {selectedIncident.classification.key_indicators.map((item) => (
-                                <div key={item} style={{ marginBottom: 6 }}>
-                                  • {item}
-                                </div>
-                              ))}
-                            </div>
-                          </Section>
-                        ) : null}
-
-                        {selectedIncident.mitigation_plan ? (
-                          <Section title="Response Planning Agent" eyebrow="Approval gated">
-                            <div style={statsGridStyle}>
-                              <Field label="Strategy" value={selectedIncident.mitigation_plan.strategy} />
-                              <Field label="Estimated time" value={selectedIncident.mitigation_plan.estimated_mitigation_time} />
-                              <Field label="Collateral risk" value={selectedIncident.mitigation_plan.collateral_risk} accent={colors.amber} />
-                              <Field label="Status" value={selectedIncident.approval_status || "pending"} />
-                            </div>
-                            <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
-                              {selectedIncident.mitigation_plan.steps.map((step) => (
-                                <div key={`${step.step}-${step.action}`} style={feedCardStyle}>
-                                  <div style={{ fontWeight: 650, marginBottom: 8 }}>
-                                    {step.step}. {step.action}
-                                  </div>
-                                  <div style={monoBoxStyle}>{step.command}</div>
-                                  <div style={{ color: colors.muted, marginTop: 10 }}>{step.impact}</div>
-                                </div>
-                              ))}
-                            </div>
-                            {selectedIncident.approval_status === "pending" ? (
-                              <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
-                                <button
-                                  onClick={() => approveIncident("approved")}
-                                  style={primaryButtonStyle}
-                                  disabled={decisionLoading[selectedIncident.attack_id]}
-                                >
-                                  Approve
-                                </button>
-                                <button
-                                  onClick={() => approveIncident("rejected")}
-                                  style={secondaryButtonStyle}
-                                  disabled={decisionLoading[selectedIncident.attack_id]}
-                                >
-                                  Reject
-                                </button>
+                            {event.agent || event.tool ? (
+                              <div style={{fontSize: 12, color: 'var(--text-subtle)', marginTop: 6}}>
+                                {event.agent ? `Agent: ${event.agent}` : ""}
+                                {event.agent && event.tool ? " • " : ""}
+                                {event.tool ? `Tool: ${event.tool}` : ""}
                               </div>
                             ) : null}
-                          </Section>
+                          </div>
+                        ))}
+                        {!observability.recent_events?.length ? (
+                          <div style={{color: 'var(--text-muted)', fontSize: 13}}>OpenTelemetry spans will appear here as soon as the collector or agents run.</div>
+                        ) : null}
+                      </div>
+                    </div>
+                    <div className="card">
+                      <div className="card-title" style={{marginBottom: 16}}>Detection Highlights</div>
+                      <div style={{display: 'grid', gap: 12}}>
+                        {(observability.recent_alerts || []).slice(0, 6).map((alert, index) => (
+                          <div key={`${alert.timestamp}-${index}`} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div className="flex-between" style={{marginBottom: 6}}>
+                              <span style={{fontWeight: 600, fontSize: 13}}>{alert.agent}</span>
+                              <span className={`status-pill badge-${alert.severity === 'CRITICAL' ? 'red' : 'amber'}`}>{alert.severity}</span>
+                            </div>
+                            <div style={{fontSize: 13, color: 'var(--text-muted)', marginBottom: 6}}>{alert.message}</div>
+                            <div style={{fontSize: 12, color: 'var(--text-subtle)'}}>Incident: {alert.attack_id || 'n/a'} • Tool: {alert.tool}</div>
+                          </div>
+                        ))}
+                        {!observability.recent_alerts?.length ? (
+                          <div style={{color: 'var(--text-muted)', fontSize: 13}}>
+                            Normal telemetry is flowing. When repeated failed logins or recon starts, the detection agent will flag it here.
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {currentTab === 'telemetry' && (
+                <div>
+                  <div className="card" style={{marginBottom: 24}}>
+                    <div className="card-title" style={{marginBottom: 16}}>Collector Setup</div>
+                    <div className="grid-layout">
+                      <div>
+                        <div style={{marginBottom: 16, color: 'var(--text-muted)'}}>
+                          Use this project token in the dummy storefront so browsing, login activity, and suspicious behavior map into the correct protected application.
+                        </div>
+                        <div style={{background: 'var(--bg-canvas)', padding: 16, borderRadius: 8, border: '1px solid var(--border-color)', marginBottom: 16}}>
+                          <div className="flex-between" style={{gap: 12, marginBottom: 8}}>
+                            <div style={{fontSize: 12, color: 'var(--color-gold)', fontWeight: 'bold'}}>COLLECTOR TOKEN</div>
+                            <button className="btn btn-secondary" style={{padding: '8px 12px'}} onClick={copyCollectorToken}>
+                              {copyFeedback || "Copy token"}
+                            </button>
+                          </div>
+                          <div style={tokenStyle}>{selectedWebsite.collector?.ingest_token || "Unavailable"}</div>
+                        </div>
+                        <div style={{display: 'grid', gap: 12}}>
+                          <div style={{padding: 14, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div style={{fontSize: 12, color: 'var(--text-subtle)', marginBottom: 6}}>How to use it</div>
+                            <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.7}}>
+                              Paste this token into NovaCart on <code>localhost:3001</code>. The storefront will begin syncing healthy application activity every few seconds and will send attack scenarios when you simulate failed logins, recon, or traffic spikes.
+                            </div>
+                          </div>
+                          <div style={{padding: 14, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div style={{fontSize: 12, color: 'var(--text-subtle)', marginBottom: 6}}>Connection status</div>
+                            <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.7}}>
+                              Recent activity should appear below as normalized application, authentication, and network events. Malicious behavior will also trigger the incident workflow in the threat-detection tab.
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="card" style={{background: 'var(--bg-canvas)', border: '1px solid var(--border-color)'}}>
+                        <div className="card-title" style={{marginBottom: 16}}>OpenTelemetry Monitor</div>
+                        <div className="grid-metrics" style={{gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12, marginBottom: 16}}>
+                          <div style={{background: 'rgba(255,255,255,0.03)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>APPLICATION LOGS</div>
+                            <div style={{fontWeight: 700, fontSize: 18}}>{observability.channels?.application_logs?.events_seen || 0}</div>
+                          </div>
+                          <div style={{background: 'rgba(255,255,255,0.03)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>AUTHENTICATION LOGS</div>
+                            <div style={{fontWeight: 700, fontSize: 18}}>{observability.channels?.authentication_logs?.events_seen || 0}</div>
+                          </div>
+                          <div style={{background: 'rgba(255,255,255,0.03)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>NETWORK LOGS</div>
+                            <div style={{fontWeight: 700, fontSize: 18}}>{observability.channels?.network_logs?.events_seen || 0}</div>
+                          </div>
+                          <div style={{background: 'rgba(255,255,255,0.03)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>FAILED LOGIN SIGNALS</div>
+                            <div style={{fontWeight: 700, fontSize: 18}}>{observability.metrics?.failed_auth_events || 0}</div>
+                          </div>
+                        </div>
+                        <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.7}}>
+                          The monitoring layer is capturing live application, authentication, and network activity from the storefront. When failed logins or suspicious scans start, those same signals feed the detection chain.
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="card">
+                    <div className="card-title" style={{marginBottom: 16}}>Normalized Event Streams</div>
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Event Type</th>
+                          <th>Message Details</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(telemetry.recent_events || []).slice(0, 10).map((event, i) => (
+                          <tr key={i}>
+                            <td style={{fontWeight: 600, textTransform: 'capitalize'}}>{event.event_type}</td>
+                            <td>{event.message}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {currentTab === 'incidents' && (
+                <div className="grid-layout">
+                  <div className="card" style={{padding: '16px 0'}}>
+                    <div className="card-title" style={{padding: '0 16px', marginBottom: 12}}>Incident Queue</div>
+                    <div style={{display: 'flex', gap: 8, padding: '0 16px 12px', flexWrap: 'wrap'}}>
+                      <select value={severityFilter} onChange={(event) => setSeverityFilter(event.target.value)} style={{...inputStyle, width: 160, marginBottom: 0}}>
+                        <option value="all">All severities</option>
+                        <option value="CRITICAL">Critical</option>
+                        <option value="HIGH">High</option>
+                        <option value="MEDIUM">Medium</option>
+                        <option value="LOW">Low</option>
+                      </select>
+                      <select value={approvalFilter} onChange={(event) => setApprovalFilter(event.target.value)} style={{...inputStyle, width: 180, marginBottom: 0}}>
+                        <option value="all">All statuses</option>
+                        <option value="pending">Pending approval</option>
+                        <option value="approved">Approved</option>
+                        <option value="rejected">Rejected</option>
+                        <option value="auto_approved">Auto approved</option>
+                        <option value="manual_required">Manual required</option>
+                      </select>
+                    </div>
+                    <div style={{display: 'flex', flexDirection: 'column'}}>
+                      {websiteIncidents.length ? websiteIncidents.map(incident => {
+                        const severity = incident.classification?.attack?.severity || "LOW";
+                        const policyMode = incident.policy_decision?.mode || "approval_required";
+                        return (
+                          <div key={incident.attack_id} className={`table-row-clickable ${selectedIncidentId === incident.attack_id ? 'active' : ''}`} onClick={() => setSelectedIncidentId(incident.attack_id)} style={{padding: '16px', borderBottom: '1px solid var(--border-color)', background: selectedIncidentId === incident.attack_id ? 'var(--panel-alt)' : 'transparent'}}>
+                            <div className="flex-between" style={{marginBottom: 8}}>
+                              <span style={{fontWeight: 600}}>{incident.classification?.predicted_class || incident.attack_id}</span>
+                              <span className={`status-pill badge-${severity === 'CRITICAL' ? 'red' : severity === 'HIGH' ? 'amber' : 'amber'}`}>{severity}</span>
+                            </div>
+                            <div style={{fontSize: 13, color: 'var(--text-muted)', marginBottom: 12}}>
+                              {incident.simulation?.description || "Investigation in progress"}
+                            </div>
+                            <div className="flex-gap">
+                              <span className="status-pill badge-blue">{policyMode.replace('_', ' ')}</span>
+                            </div>
+                          </div>
+                        )
+                      }) : <div style={{padding: 24, textAlign: 'center', color: 'var(--text-muted)'}}>No incidents found.</div>}
+                    </div>
+                  </div>
+                  
+                  <div>
+                    {selectedIncident ? (
+                      <div className="card">
+                        <div className="flex-between" style={{marginBottom: 16}}>
+                          <div>
+                            <div style={{fontSize: 12, color: 'var(--color-gold)', fontWeight: 600, marginBottom: 4}}>INCIDENT DETAILS</div>
+                            <div className="card-title" style={{fontSize: 20}}>{selectedIncident.classification?.predicted_class || selectedIncident.attack_id}</div>
+                          </div>
+                        </div>
+                        <div style={{color: 'var(--text-muted)', fontSize: 14, lineHeight: 1.6, marginBottom: 24}}>
+                          {selectedIncident.anomaly?.summary || selectedIncident.simulation?.description}
+                        </div>
+                        
+                        <div className="grid-metrics" style={{gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24}}>
+                          <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>PRIMARY SOURCE</div>
+                            <div style={{fontWeight: 600, fontSize: 13}}>{selectedIncident.classification?.attack?.primary_src_ip || '—'}</div>
+                          </div>
+                          <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>TARGET</div>
+                            <div style={{fontWeight: 600, fontSize: 13}}>{selectedIncident.classification?.attack ? `${selectedIncident.classification.attack.target_ip}:${selectedIncident.classification.attack.target_port}` : '—'}</div>
+                          </div>
+                          <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>CONFIDENCE</div>
+                            <div style={{fontWeight: 600, fontSize: 13}}>{selectedIncident.classification?.confidence ? `${Math.round(selectedIncident.classification.confidence * 100)}%` : '—'}</div>
+                          </div>
+                          <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>RISK SCORE</div>
+                            <div style={{fontWeight: 600, fontSize: 13}}>{selectedIncident.classification?.risk_score || '—'}</div>
+                          </div>
+                          <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>CLASSIFIER RUNTIME</div>
+                            <div style={{fontWeight: 600, fontSize: 13}}>{selectedIncident.runtime_metadata?.active_runtime || selectedIncident.llm_usage?.["Threat Classification Agent"]?.runtime || '—'}</div>
+                          </div>
+                          <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>CONFIDENCE SOURCE</div>
+                            <div style={{fontWeight: 600, fontSize: 13}}>{selectedIncident.classification?.confidence_source || '—'}</div>
+                          </div>
+                          <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>MODEL VERSION</div>
+                            <div style={{fontWeight: 600, fontSize: 13}}>{selectedIncident.classification?.model_prediction?.model_version || '—'}</div>
+                          </div>
+                          <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>ASSIGNEE</div>
+                            <div style={{fontWeight: 600, fontSize: 13}}>{selectedIncident.assignee?.name || 'Unassigned'}</div>
+                          </div>
+                        </div>
+
+                        <div style={{padding: 16, background: 'var(--bg-canvas)', border: '1px solid var(--border-color)', borderRadius: 12, marginBottom: 24}}>
+                          <div className="card-title" style={{marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>Ownership</div>
+                          <div className="flex-gap" style={{alignItems: 'stretch', flexWrap: 'wrap'}}>
+                            <input
+                              value={assigneeDraft}
+                              onChange={(event) => setAssigneeDraft(event.target.value)}
+                              placeholder="Assign analyst or incident owner"
+                              style={{...inputStyle, flex: '1 1 240px', marginBottom: 0}}
+                            />
+                            <button className="btn btn-secondary" onClick={assignIncident} disabled={assigning || !assigneeDraft.trim()}>
+                              {assigning ? 'Assigning...' : 'Assign owner'}
+                            </button>
+                          </div>
+                          {selectedIncident.assignee?.assigned_by ? (
+                            <div style={{fontSize: 12, color: 'var(--text-subtle)', marginTop: 8}}>
+                              Assigned by {selectedIncident.assignee.assigned_by} at {new Date(selectedIncident.assignee.assigned_at).toLocaleString()}
+                            </div>
+                          ) : null}
+                        </div>
+
+                        {selectedIncident.approval_status === "pending" && (
+                          <div style={{padding: 16, background: 'rgba(212, 167, 44, 0.1)', border: '1px solid rgba(212, 167, 44, 0.3)', borderRadius: 12, marginBottom: 24}}>
+                            <div style={{fontWeight: 600, marginBottom: 12, color: 'var(--color-amber)'}}>Human Approval Required</div>
+                            <div className="flex-gap">
+                              <button className="btn btn-primary" disabled={decisionLoading[selectedIncident.attack_id]} onClick={() => decideIncident("approved")}>Approve Containment</button>
+                              <button className="btn btn-danger" disabled={decisionLoading[selectedIncident.attack_id]} onClick={() => decideIncident("rejected")}>Reject to Manual</button>
+                            </div>
+                          </div>
+                        )}
+
+                        {selectedIncident.challenge_review ? (
+                          <div style={{padding: 16, background: 'var(--bg-canvas)', border: '1px solid var(--border-color)', borderRadius: 12, marginBottom: 24}}>
+                            <div className="card-title" style={{marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>Challenge Review</div>
+                            <div className="grid-metrics" style={{gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12, marginBottom: 12}}>
+                              <div style={{background: 'rgba(255,255,255,0.03)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                                <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>OUTCOME</div>
+                                <div style={{fontWeight: 700, fontSize: 15, textTransform: 'capitalize'}}>{selectedIncident.challenge_review.challenge_outcome || 'support'}</div>
+                              </div>
+                              <div style={{background: 'rgba(255,255,255,0.03)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                                <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>ALT CLASS</div>
+                                <div style={{fontWeight: 700, fontSize: 15}}>{selectedIncident.challenge_review.alternative_class || '—'}</div>
+                              </div>
+                              <div style={{background: 'rgba(255,255,255,0.03)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                                <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>FALSE POSITIVE RISK</div>
+                                <div style={{fontWeight: 700, fontSize: 15}}>{selectedIncident.challenge_review.false_positive_risk || '—'}</div>
+                              </div>
+                            </div>
+                            <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.7}}>
+                              Confidence in primary verdict: {selectedIncident.challenge_review.confidence_in_primary ? `${Math.round(selectedIncident.challenge_review.confidence_in_primary * 100)}%` : 'n/a'}
+                            </div>
+                            {(selectedIncident.challenge_review.notes || []).length ? (
+                              <div style={{marginTop: 10, display: 'grid', gap: 8}}>
+                                {(selectedIncident.challenge_review.notes || []).map((note, idx) => (
+                                  <div key={idx} style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6}}>
+                                    • {note}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
                         ) : null}
 
-                        {selectedIncident.action_result ? (
-                          <Section title="Action Agent" eyebrow="Execution result">
-                            <div style={statsGridStyle}>
-                              <Field label="Status" value={selectedIncident.action_result.status} accent={selectedIncident.action_result.status === "MITIGATED" ? colors.green : colors.gray} />
-                              {selectedIncident.action_result.total_execution_time_ms ? (
-                                <Field label="Execution time" value={`${selectedIncident.action_result.total_execution_time_ms} ms`} />
-                              ) : null}
-                              {selectedIncident.action_result.ticket_id ? (
-                                <Field label="Ticket" value={selectedIncident.action_result.ticket_id} />
-                              ) : null}
-                            </div>
-                          </Section>
-                        ) : null}
+                        <div className="flex-gap" style={{marginBottom: 16, flexWrap: 'wrap'}}>
+                          <button className={`btn ${incidentView === 'discussion' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setIncidentView('discussion')}>
+                            Agent Discussion
+                          </button>
+                          <button className={`btn ${incidentView === 'analysis' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setIncidentView('analysis')}>
+                            Analysis Trace
+                          </button>
+                        </div>
 
-                        {selectedIncident.incident_report ? (
-                          <Section title="Reporting Agent" eyebrow="Final report">
-                            <div style={{ color: colors.muted, lineHeight: 1.7 }}>
-                              {selectedIncident.incident_report.executive_summary}
+                        {incidentView === 'discussion' ? (
+                          <>
+                            <div className="card-title" style={{marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>AGENT DISCUSSION</div>
+                            <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
+                              {visibleDiscussion.map((entry, idx) => (
+                                <div key={idx} style={{padding: 14, background: idx % 2 === 0 ? 'rgba(139, 92, 246, 0.08)' : 'var(--bg-canvas)', borderRadius: 14, border: '1px solid var(--border-color)'}}>
+                                  <div className="flex-between" style={{marginBottom: 8, gap: 12}}>
+                                    <span style={{fontWeight: 700, fontSize: 13}}>
+                                      {entry.speaker}
+                                      {entry.audience ? (
+                                        <span style={{fontWeight: 500, color: 'var(--text-subtle)', marginLeft: 8}}>→ {entry.audience}</span>
+                                      ) : null}
+                                    </span>
+                                    <span style={{fontSize: 12, color: 'var(--text-subtle)', textTransform: 'capitalize'}}>{(entry.stage || entry.kind || 'discussion').replace(/_/g, ' ')}</span>
+                                  </div>
+                                  <div style={{fontSize: 14, color: 'var(--text-muted)', lineHeight: 1.7}}>
+                                    {entry.message}
+                                  </div>
+                                </div>
+                              ))}
+                              {!visibleDiscussion.length ? (
+                                <div style={{fontSize: 13, color: 'var(--text-muted)'}}>
+                                  The agent conversation will appear here once the incident workflow begins.
+                                </div>
+                              ) : null}
                             </div>
-                          </Section>
-                        ) : null}
-                      </>
+                          </>
+                        ) : (
+                          <>
+                            <div className="card-title" style={{marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>AGENT TRACE</div>
+                            <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
+                              {visibleAgentTrace.map((entry, idx) => (
+                                <div key={idx} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                                  <div className="flex-between" style={{marginBottom: 6}}>
+                                    <span style={{fontWeight: 600, fontSize: 13}}>{entry.agent}</span>
+                                    <span style={{fontSize: 12, color: 'var(--text-subtle)'}}>{entry.stage}</span>
+                                  </div>
+                                  <div style={{fontSize: 13, color: 'var(--text-muted)'}}>{entry.summary}</div>
+                                  {entry.details?.tool || entry.details?.llm_runtime ? (
+                                    <div style={{fontSize: 12, color: 'var(--text-subtle)', marginTop: 6}}>
+                                      {entry.details?.tool ? `Tool: ${entry.details.tool}` : ""}
+                                      {entry.details?.tool && entry.details?.llm_runtime ? " • " : ""}
+                                      {entry.details?.llm_runtime ? `Runtime: ${entry.details.llm_runtime}` : ""}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              ))}
+                              {!visibleAgentTrace.length ? (
+                                <div style={{fontSize: 13, color: 'var(--text-muted)'}}>
+                                  Agent trace will appear here once the multi-agent coordinator publishes the incident workflow.
+                                </div>
+                              ) : null}
+                            </div>
+
+                            {visibleAgentMessages.length ? (
+                              <>
+                                <div className="card-title" style={{marginTop: 24, marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>AGENT HANDOFFS</div>
+                                <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
+                                  {visibleAgentMessages.map((entry, idx) => (
+                                    <div key={idx} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                                      <div className="flex-between" style={{marginBottom: 6}}>
+                                        <span style={{fontWeight: 600, fontSize: 13}}>{entry.from} → {entry.to}</span>
+                                        <span style={{fontSize: 12, color: 'var(--text-subtle)'}}>{entry.subject}</span>
+                                      </div>
+                                      <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6}}>{entry.content}</div>
+                                      {entry.artifacts?.tool || entry.artifacts?.current_stage ? (
+                                        <div style={{fontSize: 12, color: 'var(--text-subtle)', marginTop: 6}}>
+                                          {entry.artifacts?.tool ? `Tool: ${entry.artifacts.tool}` : ""}
+                                          {entry.artifacts?.tool && entry.artifacts?.current_stage ? " • " : ""}
+                                          {entry.artifacts?.current_stage ? `Stage: ${entry.artifacts.current_stage}` : ""}
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  ))}
+                                </div>
+                              </>
+                            ) : null}
+
+                            {(selectedIncident.protocol_trace || []).length ? (
+                              <>
+                                <div className="card-title" style={{marginTop: 24, marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>A2A INVOCATION TRACE</div>
+                                <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
+                                  {(selectedIncident.protocol_trace || []).map((entry, idx) => (
+                                    <div key={idx} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                                      <div className="flex-between" style={{marginBottom: 8}}>
+                                        <span style={{fontWeight: 600, fontSize: 13}}>{entry.from_agent} → {entry.to_agent}</span>
+                                        <span style={{fontSize: 12, color: 'var(--text-subtle)'}}>{entry.protocol}</span>
+                                      </div>
+                                      <div style={{fontSize: 13, color: 'var(--text-muted)', marginBottom: 8}}>
+                                        Runtime: {entry.runtime} • Task ID: {entry.task_id}
+                                      </div>
+                                      <div style={{fontSize: 12, color: 'var(--text-subtle)', lineHeight: 1.6}}>
+                                        Stage: {entry.output_summary?.current_stage || "n/a"} • Approval: {entry.output_summary?.approval_status || "n/a"}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </>
+                            ) : null}
+
+                            {(selectedIncident.tool_trace || []).length ? (
+                              <>
+                                <div className="card-title" style={{marginTop: 24, marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>MCP TOOL TRACE</div>
+                                <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
+                                  {(selectedIncident.tool_trace || []).map((entry, idx) => (
+                                    <div key={idx} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                                      <div className="flex-between" style={{marginBottom: 8}}>
+                                        <span style={{fontWeight: 600, fontSize: 13}}>{entry.agent}</span>
+                                        <span style={{fontSize: 12, color: 'var(--text-subtle)'}}>{entry.tool}</span>
+                                      </div>
+                                      <div style={{fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6}}>
+                                        Output stage: {entry.output_summary?.current_stage || 'n/a'} • Approval: {entry.output_summary?.approval_status || 'n/a'}
+                                      </div>
+                                      {entry.llm_agent ? (
+                                        <div style={{fontSize: 12, color: 'var(--text-subtle)', marginTop: 6}}>
+                                          {entry.llm_agent} {entry.llm_used ? `used ${entry.llm_runtime || 'Gemini'}` : 'fell back to heuristic logic'}.
+                                        </div>
+                                      ) : null}
+                                      {entry.prompt_profile?.purpose ? (
+                                        <div style={{fontSize: 12, color: 'var(--text-subtle)', marginTop: 6}}>
+                                          Purpose: {entry.prompt_profile.purpose}
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  ))}
+                                </div>
+                              </>
+                            ) : null}
+                          </>
+                        )}
+
+                        <div className="card-title" style={{marginTop: 24, marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>CASE NOTES</div>
+                        <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
+                          {((selectedIncident.notes || []).length ? selectedIncident.notes : []).map((note, idx) => (
+                            <div key={idx} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                              <div className="flex-between" style={{marginBottom: 6}}>
+                                <span style={{fontWeight: 600, fontSize: 13}}>
+                                  {note.author}
+                                  {note.author_role ? (
+                                    <span style={{fontWeight: 500, color: 'var(--text-subtle)', marginLeft: 8, textTransform: 'capitalize'}}>
+                                      {note.author_role}
+                                    </span>
+                                  ) : null}
+                                </span>
+                                <span style={{fontSize: 12, color: 'var(--text-subtle)'}}>{new Date(note.created_at).toLocaleString()}</span>
+                              </div>
+                              <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6}}>{note.note}</div>
+                            </div>
+                          ))}
+                          {!(selectedIncident.notes || []).length ? (
+                            <div style={{fontSize: 13, color: 'var(--text-muted)'}}>No analyst notes yet.</div>
+                          ) : null}
+                          <textarea
+                            value={noteDraft}
+                            onChange={(event) => setNoteDraft(event.target.value)}
+                            placeholder="Add an analyst note, investigation update, or escalation comment..."
+                            style={{...inputStyle, minHeight: 110, resize: 'vertical'}}
+                          />
+                          <div>
+                            <button className="btn btn-secondary" onClick={addIncidentNote} disabled={notesSaving || !noteDraft.trim()}>
+                              {notesSaving ? 'Saving note...' : 'Add note'}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="card" style={{display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 400, color: 'var(--text-muted)'}}>
+                        Select an incident to view details
+                      </div>
                     )}
                   </div>
                 </div>
-              </Section>
+              )}
             </>
           ) : (
-            <div style={emptyStateStyle}>Select a website to continue.</div>
+            <div style={{padding: 40, textAlign: 'center', color: 'var(--text-muted)'}}>
+              Select a project from the sidebar to view metrics.
+            </div>
           )}
-        </main>
-      </div>
-    </div>
-  );
-}
-
-function StatCard({ label, value }) {
-  return (
-    <div style={statCardStyle}>
-      <div style={eyebrowStyle}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 700 }}>{value}</div>
+        </div>
+      </main>
     </div>
   );
 }
 
 const pageStyle = {
   minHeight: "100vh",
-  background: colors.background,
+  background: "linear-gradient(180deg, #09090b 0%, #0c0c0d 55%, #111114 100%)",
   color: colors.text,
-  fontFamily: 'ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif',
-  padding: 24,
-  boxSizing: "border-box",
+  padding: "28px 28px 40px",
+  fontFamily: '"Plus Jakarta Sans", "Inter", "Segoe UI", sans-serif',
+  position: "relative",
+  overflow: "hidden",
+};
+
+const landingGlowWrapStyle = {
+  position: "absolute",
+  inset: 0,
+  overflow: "hidden",
+  pointerEvents: "none",
+};
+
+const landingGlowPrimaryStyle = {
+  position: "absolute",
+  top: "-8%",
+  right: "-6%",
+  width: 520,
+  height: 520,
+  borderRadius: "50%",
+  background: "rgba(139, 92, 246, 0.12)",
+  filter: "blur(120px)",
+};
+
+const landingGlowSecondaryStyle = {
+  position: "absolute",
+  bottom: "8%",
+  left: "-10%",
+  width: 560,
+  height: 560,
+  borderRadius: "50%",
+  background: "rgba(37, 99, 235, 0.08)",
+  filter: "blur(130px)",
+};
+
+const landingShellStyle = {
+  position: "relative",
+  maxWidth: 1380,
+  margin: "0 auto",
+  display: "flex",
+  flexDirection: "column",
+  minHeight: "calc(100vh - 68px)",
+};
+
+const landingHeaderStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 24,
+  padding: "8px 0 18px",
+  flexWrap: "wrap",
+};
+
+const landingBrandStyle = {
+  display: "flex",
+  alignItems: "center",
+  gap: 14,
+};
+
+const landingBrandMarkStyle = {
+  width: 42,
+  height: 42,
+  borderRadius: 12,
+  display: "grid",
+  placeItems: "center",
+  background: "linear-gradient(135deg, #8b5cf6 0%, #4f46e5 100%)",
+  color: "#ffffff",
+  fontWeight: 800,
+  fontSize: 18,
+  boxShadow: "0 0 24px rgba(139, 92, 246, 0.28)",
+};
+
+const landingBrandNameStyle = {
+  fontSize: 22,
+  fontWeight: 800,
+  letterSpacing: -0.4,
+};
+
+const landingBrandSubStyle = {
+  color: colors.muted,
+  fontSize: 13,
+};
+
+const landingNavStyle = {
+  display: "flex",
+  gap: 28,
+  flexWrap: "wrap",
+  color: colors.muted,
+  fontSize: 14,
+};
+
+const landingBadgeStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "8px 14px",
+  borderRadius: 999,
+  border: "1px solid rgba(139, 92, 246, 0.24)",
+  background: "rgba(139, 92, 246, 0.1)",
+  color: "#d8ccff",
+  fontSize: 13,
+  fontWeight: 600,
+  marginBottom: 22,
 };
 
 const heroWrapStyle = {
   display: "grid",
-  gridTemplateColumns: "minmax(0, 1fr) 380px",
-  gap: 24,
-  maxWidth: 1180,
-  margin: "80px auto",
+  gridTemplateColumns: "minmax(0, 1.2fr) minmax(380px, 430px)",
+  gap: 36,
   alignItems: "center",
+  width: "100%",
+  flex: 1,
+  padding: "48px 0 24px",
 };
 
-const authCardStyle = {
-  background: colors.panel,
-  border: `1px solid ${colors.border}`,
-  borderRadius: 14,
-  padding: 24,
+const heroTitleStyle = {
+  fontSize: 62,
+  lineHeight: 1.02,
+  fontWeight: 800,
+  letterSpacing: -2,
+  marginBottom: 18,
+  maxWidth: 760,
+};
+
+const heroBodyStyle = {
+  color: colors.muted,
+  fontSize: 18,
+  lineHeight: 1.9,
+  maxWidth: 680,
+};
+
+const heroBadgeRowStyle = {
   display: "flex",
-  flexDirection: "column",
-  gap: 12,
+  gap: 10,
+  flexWrap: "wrap",
+  marginTop: 24,
+};
+
+const landingStatRowStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(3, minmax(0, 180px))",
+  gap: 14,
+  marginTop: 28,
+};
+
+const landingStatStyle = {
+  padding: "18px 18px 16px",
+  borderRadius: 24,
+  border: `1px solid ${colors.border}`,
+  background: "rgba(19, 19, 20, 0.78)",
+  backdropFilter: "blur(12px)",
+};
+
+const landingStatValueStyle = {
+  fontSize: 24,
+  fontWeight: 800,
+  marginBottom: 6,
+};
+
+const landingStatLabelStyle = {
+  fontSize: 13,
+  color: colors.muted,
 };
 
 const topBarStyle = {
   display: "flex",
   justifyContent: "space-between",
+  gap: 20,
   alignItems: "flex-start",
-  gap: 16,
-  maxWidth: 1480,
-  margin: "0 auto 20px",
+  marginBottom: 24,
   flexWrap: "wrap",
 };
 
-const mainGridStyle = {
+const dashboardLayoutStyle = {
   display: "grid",
   gridTemplateColumns: "320px minmax(0, 1fr)",
   gap: 20,
-  maxWidth: 1480,
-  margin: "0 auto",
+  alignItems: "start",
 };
 
 const sidebarStyle = {
   display: "flex",
   flexDirection: "column",
-  gap: 16,
+  gap: 20,
 };
 
 const sectionStyle = {
-  background: colors.panel,
+  background: "linear-gradient(180deg, rgba(19,19,20,0.98), rgba(26,26,27,0.98))",
   border: `1px solid ${colors.border}`,
-  borderRadius: 12,
-  padding: 20,
+  borderRadius: 32,
+  padding: 22,
+  boxShadow: "0 22px 42px -24px rgba(0,0,0,0.65)",
+};
+
+const sectionHeaderStyle = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  alignItems: "flex-start",
   marginBottom: 16,
+  flexWrap: "wrap",
+};
+
+const eyebrowStyle = {
+  color: colors.gold,
+  fontSize: 11,
+  fontWeight: 800,
+  letterSpacing: 1.2,
+  textTransform: "uppercase",
+  marginBottom: 6,
+};
+
+const authCardStyle = {
+  background: "linear-gradient(180deg, rgba(19,19,20,0.98), rgba(26,26,27,0.98))",
+  border: `1px solid ${colors.border}`,
+  borderRadius: 36,
+  padding: 26,
+  boxShadow: "0 24px 70px rgba(0,0,0,0.45)",
+  display: "flex",
+  flexDirection: "column",
+  gap: 12,
+  backdropFilter: "blur(14px)",
+};
+
+const authCardHeaderStyle = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 12,
+  marginBottom: 8,
+};
+
+const authCardSubStyle = {
+  color: colors.muted,
+  fontSize: 14,
+};
+
+const setupCardStyle = {
+  width: "100%",
+  background: "linear-gradient(180deg, rgba(19,19,20,0.98), rgba(26,26,27,0.98))",
+  border: `1px solid ${colors.border}`,
+  borderRadius: 36,
+  padding: 28,
+  boxShadow: "0 22px 60px rgba(0,0,0,0.45)",
+  backdropFilter: "blur(14px)",
+};
+
+const setupSplitStyle = {
+  position: "relative",
+  display: "grid",
+  gridTemplateColumns: "minmax(0, 1fr) minmax(420px, 520px)",
+  gap: 32,
+  alignItems: "center",
+  maxWidth: 1320,
+  margin: "36px auto 0",
+};
+
+const setupIntroStyle = {
+  maxWidth: 700,
+};
+
+const landingFooterStyle = {
+  marginTop: "auto",
+  paddingTop: 24,
+  borderTop: "1px solid rgba(255,255,255,0.06)",
+  color: colors.subtle,
+  fontSize: 12,
+  letterSpacing: 0.3,
 };
 
 const inputStyle = {
   width: "100%",
-  padding: "12px 14px",
-  borderRadius: 10,
+  padding: "14px 16px",
+  borderRadius: 18,
   border: `1px solid ${colors.border}`,
   outline: "none",
-  fontSize: 14,
-  boxSizing: "border-box",
-};
-
-const primaryButtonStyle = {
-  border: "none",
-  borderRadius: 10,
-  padding: "11px 14px",
-  background: colors.text,
-  color: "#ffffff",
-  fontWeight: 600,
-  cursor: "pointer",
-};
-
-const secondaryButtonStyle = {
-  border: `1px solid ${colors.border}`,
-  borderRadius: 10,
-  padding: "11px 14px",
-  background: colors.panel,
+  fontSize: 15,
+  background: "#1a1a1b",
   color: colors.text,
-  fontWeight: 600,
-  cursor: "pointer",
-};
-
-const errorStyle = {
-  background: "#fff1f1",
-  border: `1px solid #f1d1d1`,
-  color: colors.red,
-  padding: "10px 12px",
-  borderRadius: 10,
-};
-
-const setupCardStyle = {
-  maxWidth: 760,
-  margin: "40px auto",
-  background: colors.panel,
-  border: `1px solid ${colors.border}`,
-  borderRadius: 14,
-  padding: 24,
+  boxSizing: "border-box",
 };
 
 const formGridStyle = {
   display: "grid",
-  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
   gap: 12,
   marginBottom: 16,
 };
 
-const websiteButtonStyle = {
-  textAlign: "left",
-  border: `1px solid ${colors.border}`,
-  borderRadius: 10,
-  padding: 12,
+const primaryButtonStyle = {
+  padding: "12px 18px",
+  borderRadius: 999,
+  border: "none",
+  background: "linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%)",
+  color: "#fff",
+  fontWeight: 700,
   cursor: "pointer",
 };
 
-const feedCardStyle = {
-  background: colors.panelAlt,
+const secondaryButtonStyle = {
+  padding: "12px 18px",
+  borderRadius: 999,
   border: `1px solid ${colors.border}`,
-  borderRadius: 10,
-  padding: 12,
+  background: "#1a1a1b",
+  color: colors.text,
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
+const dangerButtonStyle = {
+  padding: "12px 18px",
+  borderRadius: 999,
+  border: "none",
+  background: "linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)",
+  color: "#fff",
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
+const errorStyle = {
+  marginBottom: 18,
+  borderRadius: 16,
+  border: `1px solid ${colors.red}`,
+  background: `${colors.red}14`,
+  padding: "12px 14px",
+  color: colors.red,
+};
+
+const projectCardStyle = {
+  width: "100%",
+  borderRadius: 24,
+  border: `1px solid ${colors.border}`,
+  padding: 16,
+  textAlign: "left",
+  cursor: "pointer",
+  color: colors.text,
+};
+
+const feedCardStyle = {
+  borderRadius: 22,
+  border: `1px solid ${colors.border}`,
+  padding: 14,
+  background: colors.panelAlt,
 };
 
 const statsGridStyle = {
@@ -923,44 +1983,176 @@ const statsGridStyle = {
   gap: 14,
 };
 
-const miniStatsGridStyle = {
-  display: "grid",
-  gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-  gap: 12,
-  marginBottom: 16,
-};
-
 const statCardStyle = {
-  background: colors.panel,
+  background: "linear-gradient(180deg, rgba(19,19,20,0.98), rgba(26,26,27,0.98))",
   border: `1px solid ${colors.border}`,
-  borderRadius: 12,
-  padding: "16px 18px",
+  borderRadius: 24,
+  padding: 18,
 };
 
-const eyebrowStyle = {
-  color: colors.subtle,
-  fontSize: 12,
-  fontWeight: 600,
-  marginBottom: 6,
+const heroPanelStyle = {
+  display: "grid",
+  gridTemplateColumns: "minmax(0, 1fr) minmax(320px, 380px)",
+  gap: 18,
+  alignItems: "start",
 };
 
-const monoBoxStyle = {
-  background: "#fafaf9",
+const collectorCardStyle = {
+  background: "linear-gradient(135deg, rgba(36,26,54,0.98), rgba(76,29,149,0.96))",
+  color: "#fff",
+  borderRadius: 24,
+  padding: 18,
+  minHeight: 120,
+  display: "flex",
+  flexDirection: "column",
+  gap: 12,
+};
+
+const integrationGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "minmax(0, 1.15fr) minmax(320px, 0.85fr)",
+  gap: 16,
+  alignItems: "start",
+};
+
+const integrationPanelStyle = {
+  borderRadius: 24,
   border: `1px solid ${colors.border}`,
-  borderRadius: 10,
-  padding: 12,
-  fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
-  color: colors.text,
-  overflowX: "auto",
+  background: colors.panelAlt,
+  padding: 20,
+};
+
+const codePanelStyle = {
+  borderRadius: 24,
+  padding: 20,
+  background: "linear-gradient(180deg, #19131f, #121215)",
+  color: "#edf4ff",
+  border: "1px solid rgba(255,255,255,0.08)",
+};
+
+const codeBlockStyle = {
+  margin: 0,
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
   fontSize: 13,
-  lineHeight: 1.6,
+  lineHeight: 1.7,
+  fontFamily: '"SFMono-Regular", Consolas, monospace',
 };
 
-const emptyStateStyle = {
-  background: colors.panel,
-  border: `1px solid ${colors.border}`,
-  borderRadius: 12,
-  padding: 30,
-  color: colors.muted,
-  textAlign: "center",
+const tokenStyle = {
+  fontFamily: '"SFMono-Regular", Consolas, monospace',
+  fontSize: 13,
+  lineHeight: 1.7,
+  background: "rgba(255,255,255,0.14)",
+  borderRadius: 14,
+  padding: "10px 12px",
+  wordBreak: "break-all",
 };
+
+const menuPanelStyle = {
+  position: "absolute",
+  top: "calc(100% + 10px)",
+  right: 0,
+  width: 300,
+  borderRadius: 24,
+  border: `1px solid ${colors.border}`,
+  background: "rgba(19,19,20,0.98)",
+  boxShadow: "0 24px 60px rgba(0,0,0,0.45)",
+  overflow: "hidden",
+  zIndex: 30,
+  backdropFilter: "blur(18px)",
+};
+
+const menuPanelHeaderStyle = {
+  padding: "14px 14px 10px",
+  color: colors.gold,
+  fontSize: 11,
+  fontWeight: 800,
+  letterSpacing: 1.1,
+  textTransform: "uppercase",
+};
+
+const menuItemStyle = {
+  padding: "12px 14px",
+  borderTop: `1px solid ${colors.border}`,
+  background: "rgba(255,255,255,0.015)",
+};
+
+const menuEmptyStyle = {
+  padding: "18px 14px 20px",
+  color: colors.muted,
+  fontSize: 13,
+  borderTop: `1px solid ${colors.border}`,
+};
+
+const menuActionButtonStyle = {
+  width: "calc(100% - 28px)",
+  margin: "0 14px 14px",
+  padding: "11px 14px",
+  borderRadius: 14,
+  border: `1px solid ${colors.border}`,
+  background: colors.panelAlt,
+  color: colors.text,
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
+const profileButtonStyle = {
+  width: 40,
+  height: 40,
+  borderRadius: 999,
+  border: `1px solid rgba(198, 163, 111, 0.28)`,
+  background: "linear-gradient(135deg, rgba(198,163,111,0.22), rgba(104,81,48,0.3))",
+  color: colors.text,
+  fontWeight: 800,
+  fontSize: 14,
+  cursor: "pointer",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+};
+
+const tableWrapStyle = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 10,
+};
+
+const tableRowStyle = {
+  display: "flex",
+  gap: 12,
+  alignItems: "flex-start",
+  padding: 14,
+  borderRadius: 20,
+  background: colors.panelAlt,
+  border: `1px solid ${colors.border}`,
+};
+
+const incidentLayoutStyle = {
+  display: "grid",
+  gridTemplateColumns: "320px minmax(0, 1fr)",
+  gap: 16,
+  alignItems: "start",
+};
+
+const detailHeroStyle = {
+  padding: 20,
+  borderRadius: 24,
+  background: "linear-gradient(135deg, rgba(19,19,20,0.98), rgba(26,26,27,0.98))",
+  border: `1px solid ${colors.border}`,
+};
+
+const traceCardStyle = {
+  borderRadius: 20,
+  border: `1px solid ${colors.border}`,
+  padding: 14,
+  background: colors.panelAlt,
+};
+
+const metaGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+  gap: 14,
+};
+
+export default App;

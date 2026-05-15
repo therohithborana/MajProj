@@ -1,0 +1,69 @@
+{
+  "version": "1.0.0",
+  "features": [
+    "request_burst",
+    "failed_auth_attempts",
+    "port_span",
+    "suspicious_path_hits",
+    "unique_sources",
+    "packet_rate",
+    "bytes_rate",
+    "syn_event_count"
+  ],
+  "labels": [
+    "DDoS",
+    "BruteForce",
+    "PortScan",
+    "SuspiciousRecon"
+  ],
+  "centroids": {
+    "DDoS": {
+      "request_burst": 29.1158,
+      "failed_auth_attempts": 1.0907,
+      "port_span": 2.4189,
+      "suspicious_path_hits": 1.0193,
+      "unique_sources": 19.0092,
+      "packet_rate": 7874.3927,
+      "bytes_rate": 338239.9241,
+      "syn_event_count": 21.4947
+    },
+    "BruteForce": {
+      "request_burst": 4.4854,
+      "failed_auth_attempts": 18.7869,
+      "port_span": 3.0022,
+      "suspicious_path_hits": 0.9193,
+      "unique_sources": 2.3214,
+      "packet_rate": 256.4674,
+      "bytes_rate": 9047.3373,
+      "syn_event_count": 2.7839
+    },
+    "PortScan": {
+      "request_burst": 6.185,
+      "failed_auth_attempts": 1.4528,
+      "port_span": 23.9095,
+      "suspicious_path_hits": 0.9642,
+      "unique_sources": 1.9754,
+      "packet_rate": 506.8388,
+      "bytes_rate": 16448.7634,
+      "syn_event_count": 11.046
+    },
+    "SuspiciousRecon": {
+      "request_burst": 9.1351,
+      "failed_auth_attempts": 0.9881,
+      "port_span": 4.8369,
+      "suspicious_path_hits": 11.6357,
+      "unique_sources": 3.0945,
+      "packet_rate": 301.6983,
+      "bytes_rate": 11493.9032,
+      "syn_event_count": 5.4829
+    }
+  },
+  "spreads": {
+    "DDoS": 87366.5109,
+    "BruteForce": 3128.9206,
+    "PortScan": 5989.6477,
+    "SuspiciousRecon": 3721.143
+  },
+  "training_method": "synthetic_centroid_classifier",
+  "sample_count": 320
+}

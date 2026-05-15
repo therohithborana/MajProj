@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#111315" />
+    <meta
+      name="description"
+      content="NovaCart storefront for modern home, travel, and workspace essentials."
+    />
+    <title>NovaCart</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <aside class="setup-panel">
+        <div class="eyebrow">Store Connection</div>
+        <h1>NovaCart Operations</h1>
+        <p class="muted">
+          Connect the live store workspace, keep customer activity synced, and monitor storefront health.
+        </p>
+
+        <label>
+          <span>Operations API Base</span>
+          <input id="apiBase" type="text" value="http://localhost:8000" />
+        </label>
+
+        <label>
+          <span>Store Connection Key</span>
+          <input id="collectorToken" type="text" placeholder="Paste the project token here" />
+        </label>
+
+        <label>
+          <span>Environment Label</span>
+          <input id="sourceLabel" type="text" value="NovaCart production collector" />
+        </label>
+
+        <div class="button-row">
+          <button id="saveConfigBtn" class="primary-btn">Save settings</button>
+          <button id="sendHealthBtn" class="secondary-btn">Sync store activity</button>
+        </div>
+
+        <div class="status-card">
+          <div class="status-label">Store status</div>
+          <div id="collectorStatus" class="status-value">Waiting for configuration</div>
+        </div>
+
+        <div class="code-card">
+          <div class="code-title">Store overview</div>
+          <ul>
+            <li>Customer browsing, account, and storefront activity stay connected in one place</li>
+            <li>Healthy store activity syncs in the background every few seconds</li>
+            <li>Merchant and customer actions can be tested from a realistic storefront flow</li>
+          </ul>
+        </div>
+      </aside>
+
+      <main class="site-canvas">
+        <header class="hero">
+          <div class="brand-line">
+            <div class="brand-mark">N</div>
+            <div>
+              <div class="brand-name">NovaCart</div>
+              <div class="brand-subtitle">Objects for calmer spaces and better routines</div>
+            </div>
+          </div>
+          <nav class="nav-links">
+            <a href="#new-arrivals">New arrivals</a>
+            <a href="#products">Products</a>
+            <a href="#collections">Collections</a>
+            <a href="#account">Account</a>
+          </nav>
+        </header>
+
+        <section class="hero-card">
+          <div class="hero-copy">
+            <div class="eyebrow light">Spring Living Edit</div>
+            <h2>Design-led essentials for work, travel, and home that feel intentional from the first touch.</h2>
+            <p>
+              Discover clean silhouettes, premium textures, and everyday tools built to simplify movement between
+              desk, doorstep, and weekend travel.
+            </p>
+            <div class="button-row">
+              <button id="browseBtn" class="accent-btn">Shop best sellers</button>
+              <button id="checkoutBtn" class="secondary-site-btn">Start checkout</button>
+            </div>
+          </div>
+          <div class="hero-showcase">
+            <div class="showcase-card highlight">
+              <div class="showcase-copy">
+                <span>Featured bundle</span>
+                <strong>Workspace Reset Kit</strong>
+                <p>Desk mat, charging dock, notebook sleeve, and cable tray in one curated set.</p>
+              </div>
+            </div>
+            <div class="showcase-grid">
+              <div class="site-stat">
+                <span>Free shipping</span>
+                <strong>Orders over Rs 1,999</strong>
+              </div>
+              <div class="site-stat">
+                <span>Delivery promise</span>
+                <strong>2 to 4 business days</strong>
+              </div>
+              <div class="site-stat">
+                <span>Customer rating</span>
+                <strong>4.8 from 2,400+ reviews</strong>
+              </div>
+              <div class="site-stat">
+                <span>New drops</span>
+                <strong>Every Thursday at 7 PM</strong>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="new-arrivals" class="editorial-strip">
+          <article class="editorial-card wide">
+            <div class="eyebrow">New arrival</div>
+            <h3>Soft structure for lighter travel</h3>
+            <p>Explore weekend-ready luggage, modular packing tools, and compact organizers in muted sand, graphite, and moss.</p>
+            <button data-scenario="browse" class="ghost-btn">Explore travel edit</button>
+          </article>
+          <article class="editorial-card">
+            <div class="eyebrow">Members</div>
+            <h3>Early access now live</h3>
+            <p>Members can preview capsule launches, limited bundles, and private restocks before public release.</p>
+          </article>
+          <article class="editorial-card">
+            <div class="eyebrow">Shipping</div>
+            <h3>Same-day dispatch</h3>
+            <p>Selected metro orders placed before 3 PM are packed and dispatched from our Bengaluru hub the same day.</p>
+          </article>
+        </section>
+
+        <section id="products" class="product-grid">
+          <article class="product-card">
+            <div class="product-visual warm"></div>
+            <div class="product-badge">Popular</div>
+            <h3>Drift Carry Tote</h3>
+            <p>Minimal everyday tote with padded laptop sleeve, water-resistant shell, and structured base.</p>
+            <div class="product-meta">
+              <strong>Rs 3,490</strong>
+              <span>Sand / Graphite</span>
+            </div>
+            <button data-scenario="browse" class="ghost-btn">Add to cart</button>
+          </article>
+          <article class="product-card">
+            <div class="product-visual slate"></div>
+            <div class="product-badge">New</div>
+            <h3>Calm Desk Set</h3>
+            <p>Desk mat, pen tray, and wireless charging stand built to keep workspaces clear and balanced.</p>
+            <div class="product-meta">
+              <strong>Rs 2,890</strong>
+              <span>Stone / Ink</span>
+            </div>
+            <button data-scenario="browse" class="ghost-btn">Add to cart</button>
+          </article>
+          <article class="product-card">
+            <div class="product-visual forest"></div>
+            <div class="product-badge">Editors' pick</div>
+            <h3>Weekender Travel Kit</h3>
+            <p>Compact packing cubes, grooming pouch, and passport wallet for short business trips.</p>
+            <div class="product-meta">
+              <strong>Rs 4,250</strong>
+              <span>Moss / Clay</span>
+            </div>
+            <button data-scenario="browse" class="ghost-btn">Add to cart</button>
+          </article>
+        </section>
+
+        <section id="collections" class="scenario-grid">
+          <article class="scenario-card">
+            <div class="eyebrow">Collection</div>
+            <h3>Workday essentials</h3>
+            <p>Smart organizers, desk upgrades, and compact bags made for daily routines.</p>
+            <button data-scenario="healthy" class="secondary-site-btn">Explore collection</button>
+          </article>
+          <article class="scenario-card">
+            <div class="eyebrow">Collection</div>
+            <h3>Travel light</h3>
+            <p>Flexible packing tools, soft storage, and quick-access accessories for weekends away.</p>
+            <button data-scenario="healthy" class="secondary-site-btn">See travel picks</button>
+          </article>
+          <article class="scenario-card">
+            <div class="eyebrow">Collection</div>
+            <h3>Home reset</h3>
+            <p>Soft textures, modular trays, and entryway pieces for tidier shared spaces.</p>
+            <button data-scenario="healthy" class="secondary-site-btn">Shop home edit</button>
+          </article>
+          <article class="scenario-card">
+            <div class="eyebrow">Service</div>
+            <h3>Member perks</h3>
+            <p>Early access launches, curated bundles, and priority support for repeat customers.</p>
+            <button data-scenario="healthy" class="secondary-site-btn">Join membership</button>
+          </article>
+        </section>
+
+        <section id="account" class="admin-grid">
+          <div class="admin-card">
+            <div class="eyebrow">Customer account</div>
+            <h3>Sign in to your account</h3>
+            <p>Track orders, save addresses, and view your latest purchases.</p>
+            <form id="customerLoginForm" class="form-stack">
+              <input id="customerEmail" type="email" placeholder="customer@novacart.io" />
+              <input id="customerPassword" type="password" placeholder="password" />
+              <button type="submit" class="accent-btn">Sign in</button>
+            </form>
+          </div>
+
+          <div class="admin-card">
+            <div class="eyebrow">Store team</div>
+            <h3>Merchant login</h3>
+            <p>Access inventory, fulfillment, and customer support tools for the NovaCart store team.</p>
+            <form id="adminLoginForm" class="form-stack">
+              <input id="adminUser" type="text" placeholder="team@novacart.io" />
+              <input id="adminPassword" type="password" placeholder="password" />
+              <button type="submit" class="secondary-site-btn">Open merchant console</button>
+            </form>
+          </div>
+        </section>
+
+        <section class="activity-card">
+          <div class="activity-header">
+            <div>
+              <div class="eyebrow">Recent activity</div>
+              <h3>Store activity feed</h3>
+            </div>
+            <button id="clearLogBtn" class="ghost-btn">Clear log</button>
+          </div>
+          <div id="activityLog" class="activity-log"></div>
+        </section>
+      </main>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+  </html>
