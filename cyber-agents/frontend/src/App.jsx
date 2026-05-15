@@ -336,6 +336,7 @@ function App() {
                 agent_trace: payload.data.agent_trace || existing.agent_trace,
                 agent_messages: payload.data.agent_messages || existing.agent_messages,
                 agent_discussion: payload.data.agent_discussion || existing.agent_discussion,
+                reasoning_trace: payload.data.reasoning_trace || existing.reasoning_trace,
                 protocol_trace: payload.data.protocol_trace || existing.protocol_trace,
                 tool_trace: payload.data.tool_trace || existing.tool_trace,
                 runtime_metadata: payload.data.runtime_metadata || existing.runtime_metadata,
@@ -471,7 +472,7 @@ function App() {
       agent: entry.llm_agent || entry.agent,
       stage: entry.output_summary?.current_stage || entry.tool,
       summary: entry.llm_used
-        ? `${entry.llm_agent || entry.agent} used ${entry.tool} with Gemini-backed reasoning.`
+        ? `${entry.llm_agent || entry.agent} used ${entry.tool} with OpenRouter-backed reasoning.`
         : `${entry.agent} executed ${entry.tool} through the MCP tool runtime.`,
       details: {
         tool: entry.tool,
@@ -494,7 +495,7 @@ function App() {
         to: next ? next.llm_agent || next.agent : "Dashboard",
         subject: entry.prompt_profile?.purpose || "Agent handoff",
         content: entry.llm_used
-          ? `${entry.llm_agent || entry.agent} completed a Gemini-backed reasoning step and passed the updated incident state forward.`
+          ? `${entry.llm_agent || entry.agent} completed an OpenRouter-backed reasoning step and passed the updated incident state forward.`
           : `${entry.agent} finished ${entry.tool} and passed the structured result to the next stage.`,
         artifacts: {
           tool: entry.tool,
@@ -528,7 +529,7 @@ function App() {
           speaker: entry.llm_agent || entry.agent,
           audience: next ? next.llm_agent || next.agent : "SOC Dashboard",
           message: entry.llm_used
-            ? `I completed ${entry.tool} using Gemini-backed reasoning. Please take the updated state and continue the workflow.`
+            ? `I completed ${entry.tool} using OpenRouter-backed reasoning. Please take the updated state and continue the workflow.`
             : `I completed ${entry.tool} using deterministic logic. Please continue with the updated incident state.`,
           stage: entry.output_summary?.current_stage || entry.tool,
           kind: "handoff",
@@ -536,6 +537,13 @@ function App() {
       });
     }
     return dedupeDiscussionEntries(discussion);
+  }, [selectedIncident]);
+
+  const visibleReasoningTrace = useMemo(() => {
+    if (!selectedIncident) {
+      return [];
+    }
+    return selectedIncident.reasoning_trace || [];
   }, [selectedIncident]);
 
   const stats = useMemo(
@@ -1290,7 +1298,7 @@ function App() {
                                     ) : null}
                                   </span>
                                   <span style={{fontSize: 12, color: 'var(--text-subtle)', textTransform: 'capitalize'}}>
-                                    {discussion.source === 'gemini' ? 'Gemini' : 'Fallback'}
+                                    {discussion.source === 'gemini' ? 'OpenRouter model' : 'Fallback'}
                                   </span>
                                 </div>
                                 <div style={{fontSize: 14, color: 'var(--text-muted)', lineHeight: 1.7}}>
@@ -1740,6 +1748,9 @@ function App() {
                           <button className={`btn ${incidentDetailTab === 'analysis' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setIncidentDetailTab('analysis')}>
                             Analysis Trace
                           </button>
+                          <button className={`btn ${incidentDetailTab === 'reasoning' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setIncidentDetailTab('reasoning')}>
+                            Debug Reasoning
+                          </button>
                           <button className={`btn ${incidentDetailTab === 'report' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setIncidentDetailTab('report')}>
                             Report
                           </button>
@@ -1831,7 +1842,7 @@ function App() {
                                     {entry.message}
                                   </div>
                                   <div style={{fontSize: 12, color: 'var(--text-subtle)', marginTop: 8, textTransform: 'capitalize'}}>
-                                    {entry.source === 'gemini' ? 'Generated with Gemini' : 'Local fallback'}
+                                    {entry.source === 'gemini' ? 'Generated with OpenRouter model' : 'Local fallback'}
                                   </div>
                                 </div>
                               ))}
@@ -1929,7 +1940,7 @@ function App() {
                                       </div>
                                       {entry.llm_agent ? (
                                         <div style={{fontSize: 12, color: 'var(--text-subtle)', marginTop: 6}}>
-                                          {entry.llm_agent} {entry.llm_used ? `used ${entry.llm_runtime || 'Gemini'}` : 'fell back to heuristic logic'}.
+                                          {entry.llm_agent} {entry.llm_used ? `used ${entry.llm_runtime || 'OpenRouter model'}` : 'fell back to heuristic logic'}.
                                         </div>
                                       ) : null}
                                       {entry.prompt_profile?.purpose ? (
@@ -1947,6 +1958,62 @@ function App() {
                                 </div>
                               </>
                             ) : null}
+                          </>
+                        ) : null}
+
+                        {incidentDetailTab === 'reasoning' ? (
+                          <>
+                            <div className="card-title" style={{marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>RAW MODEL TRACE</div>
+                            <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
+                              {visibleReasoningTrace.map((entry, idx) => (
+                                <div key={idx} style={{padding: 14, background: 'var(--bg-canvas)', borderRadius: 12, border: '1px solid var(--border-color)'}}>
+                                  <div className="flex-between" style={{marginBottom: 10, gap: 12}}>
+                                    <div>
+                                      <div style={{fontWeight: 700, fontSize: 13}}>{entry.actor}</div>
+                                      <div style={{fontSize: 12, color: 'var(--text-subtle)', textTransform: 'capitalize'}}>
+                                        {(entry.stage || entry.kind || 'reasoning').replace(/_/g, ' ')} • {entry.used ? (entry.runtime || 'deepseek') : 'fallback'}
+                                      </div>
+                                    </div>
+                                    <span style={{fontSize: 12, color: 'var(--text-subtle)', textTransform: 'uppercase'}}>{entry.kind || 'trace'}</span>
+                                  </div>
+                                  {entry.prompt_preview ? (
+                                    <div style={{marginBottom: 12}}>
+                                      <div style={{fontSize: 11, color: 'var(--color-gold)', marginBottom: 6}}>PROMPT PREVIEW</div>
+                                      <pre style={{margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12, lineHeight: 1.6, color: 'var(--text-subtle)', background: 'rgba(255,255,255,0.03)', padding: 12, borderRadius: 10, border: '1px solid var(--border-color)'}}>
+{entry.prompt_preview}
+                                      </pre>
+                                    </div>
+                                  ) : null}
+                                  <div style={{marginBottom: 12}}>
+                                    <div style={{fontSize: 11, color: 'var(--color-gold)', marginBottom: 6}}>RAW RESPONSE</div>
+                                    <pre style={{margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12, lineHeight: 1.6, color: 'var(--text-muted)', background: 'rgba(255,255,255,0.03)', padding: 12, borderRadius: 10, border: '1px solid var(--border-color)', maxHeight: 220, overflow: 'auto'}}>
+{entry.response_text || 'No raw model text was captured for this step.'}
+                                    </pre>
+                                  </div>
+                                  {(entry.reasoning_details || []).length ? (
+                                    <div>
+                                      <div style={{fontSize: 11, color: 'var(--color-gold)', marginBottom: 6}}>REASONING DETAILS</div>
+                                      <div style={{display: 'grid', gap: 8}}>
+                                        {(entry.reasoning_details || []).map((detail, detailIdx) => (
+                                          <pre key={detailIdx} style={{margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12, lineHeight: 1.6, color: 'var(--text-subtle)', background: 'rgba(139, 92, 246, 0.08)', padding: 12, borderRadius: 10, border: '1px solid var(--border-color)', maxHeight: 180, overflow: 'auto'}}>
+{typeof detail === 'string' ? detail : detail.text || JSON.stringify(detail, null, 2)}
+                                          </pre>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div style={{fontSize: 12, color: 'var(--text-subtle)'}}>
+                                      No reasoning details were returned for this step.
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                              {!visibleReasoningTrace.length ? (
+                                <div style={{fontSize: 13, color: 'var(--text-muted)'}}>
+                                  Raw OpenRouter planner and agent reasoning will appear here for new incidents once the backend captures it.
+                                </div>
+                              ) : null}
+                            </div>
                           </>
                         ) : null}
 

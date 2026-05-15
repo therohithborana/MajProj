@@ -149,7 +149,7 @@ async def get_website_integration(website_id: str, request: Request, user=Depend
             "mcp_endpoint": f"{origin}/mcp",
             "mcp_tools_url": f"{origin}/mcp/tools",
             "observability_url": f"{origin}/websites/{serialized['_id']}/observability",
-            "runtime": "mcp_tools_plus_gemini",
+            "runtime": "mcp_tools_plus_openrouter",
             "opentelemetry": {
                 "enabled": True,
                 "collection_mode": "custom_security_events_plus_opentelemetry",

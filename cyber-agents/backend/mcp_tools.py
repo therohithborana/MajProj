@@ -19,7 +19,6 @@ from agents import (
     threat_classification,
     threat_resolve,
 )
-from gemini_client import call_gemini
 from models import serialize_document
 from otel_runtime import otel_runtime
 
@@ -244,33 +243,25 @@ class McpMultiAgentCoordinator:
 
     def _choose_next_tool(self, state: dict, pending_tools: list[str], phase: str) -> tuple[str, str, bool]:
         fallback_tool = pending_tools[0]
-        planner_prompt = f"""
-Current phase: {phase}
-Pending tools: {pending_tools}
-Current state summary:
-{json.dumps(_state_summary(state), ensure_ascii=False)}
-
-Return a JSON object with exactly this shape:
-{{
-  "next_tool": "one item from pending tools",
-  "reason": "one concise sentence",
-  "skip_challenge": false
-}}
-
-Rules:
-- next_tool must be one of the pending tools
-- skip_challenge may only be true if analysis.challenge_classification is still pending and the classification confidence is already strong
-- return JSON only
-""".strip()
-        response = call_gemini(f"{PLANNER_SYSTEM_PROMPT}\n\n{planner_prompt}")
-        try:
-            parsed = json.loads(response.strip().removeprefix("```json").removesuffix("```").strip())
-            chosen = parsed.get("next_tool")
-            if chosen in pending_tools:
-                return chosen, str(parsed.get("reason") or "Coordinator selected the next MCP tool.").strip(), bool(parsed.get("skip_challenge"))
-        except Exception:
-            pass
-        return fallback_tool, f"Coordinator selected {fallback_tool} from the remaining MCP plan.", False
+        classification = (state.get("classification") or {})
+        confidence = float(classification.get("confidence") or 0.0)
+        if (
+            "analysis.challenge_classification" in pending_tools
+            and confidence >= 0.9
+            and phase == "detection"
+        ):
+            return (
+                "analysis.challenge_classification",
+                "Coordinator is closing out the bounded detection workflow with a final challenge review before response planning.",
+                False,
+            )
+        if fallback_tool.startswith("telemetry."):
+            reason = "Coordinator is advancing the bounded telemetry pipeline from normalization through correlation."
+        elif fallback_tool.startswith("analysis."):
+            reason = "Coordinator is advancing the bounded analysis pipeline from classification through challenge review."
+        else:
+            reason = "Coordinator is advancing the bounded response pipeline from planning through policy and execution."
+        return fallback_tool, reason, False
 
     def run_detection_pipeline(self, state: dict) -> dict:
         current = deepcopy(state)

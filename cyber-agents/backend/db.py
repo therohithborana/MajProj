@@ -29,3 +29,5 @@ def init_db():
     db.events.create_index([("attack_id", ASCENDING), ("timestamp", ASCENDING)])
     db.jobs.create_index([("website_id", ASCENDING), ("created_at", ASCENDING)])
     db.jobs.create_index([("status", ASCENDING), ("updated_at", ASCENDING)])
+    db.policy_memory.create_index([("website_id", ASCENDING)], unique=True)
+    db.policy_memory.create_index([("updated_at", ASCENDING)])

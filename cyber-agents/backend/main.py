@@ -2,6 +2,7 @@ import asyncio
 from contextlib import suppress
 from datetime import datetime, timezone
 import json
+import logging
 import uuid
 
 from bson import ObjectId
@@ -17,6 +18,10 @@ from otel_runtime import otel_runtime
 from red_team import simulate_attack
 from routes.auth import router as auth_router
 from routes.websites import router as websites_router
+
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
+logger = logging.getLogger("cyberagent.main")
 
 
 app = FastAPI(title="CyberAgent API")
@@ -51,6 +56,146 @@ STAGE_MESSAGES = {
     "action": "Action Agent executed the approved response path.",
     "report": "Reporting Agent generated the final incident report.",
 }
+
+
+def _policy_memory_default(website_id: str) -> dict:
+    return {
+        "website_id": website_id,
+        "memory_version": "v1",
+        "decision_counts": {
+            "auto_execute": 0,
+            "approval_required": 0,
+            "manual_escalation": 0,
+        },
+        "attack_type_patterns": {},
+        "recent_decisions": [],
+        "last_incident_id": None,
+        "updated_at": utc_now(),
+    }
+
+
+def _rebuild_attack_type_patterns(entries: list[dict]) -> dict:
+    patterns: dict[str, dict] = {}
+    for entry in entries:
+        attack_type = entry.get("attack_type") or "Unknown"
+        bucket = patterns.setdefault(
+            attack_type,
+            {
+                "count": 0,
+                "mode_counts": {"auto_execute": 0, "approval_required": 0, "manual_escalation": 0},
+                "approved_count": 0,
+                "rejected_count": 0,
+                "manual_count": 0,
+                "last_reason": None,
+                "preferred_mode": None,
+            },
+        )
+        bucket["count"] += 1
+        mode = entry.get("proposed_mode")
+        if mode in bucket["mode_counts"]:
+            bucket["mode_counts"][mode] += 1
+        final_status = entry.get("final_approval_status")
+        if final_status in {"approved", "auto_approved"}:
+            bucket["approved_count"] += 1
+        elif final_status == "rejected":
+            bucket["rejected_count"] += 1
+        elif final_status == "manual_required":
+            bucket["manual_count"] += 1
+        bucket["last_reason"] = entry.get("reason") or bucket["last_reason"]
+        preferred_mode = max(bucket["mode_counts"], key=bucket["mode_counts"].get)
+        bucket["preferred_mode"] = preferred_mode if bucket["mode_counts"][preferred_mode] else None
+    return patterns
+
+
+def _load_policy_memory(website_id: str) -> dict:
+    document = db.policy_memory.find_one({"website_id": website_id})
+    if not document:
+        return _policy_memory_default(website_id)
+    memory = serialize_document(document)
+    memory.setdefault("website_id", website_id)
+    memory.setdefault("memory_version", "v1")
+    memory.setdefault(
+        "decision_counts",
+        {"auto_execute": 0, "approval_required": 0, "manual_escalation": 0},
+    )
+    memory.setdefault("attack_type_patterns", {})
+    memory.setdefault("recent_decisions", [])
+    memory.setdefault("last_incident_id", None)
+    return memory
+
+
+def _policy_memory_summary(memory: dict) -> dict:
+    recent_decisions = list(memory.get("recent_decisions") or [])[-5:]
+    patterns = memory.get("attack_type_patterns") or {}
+    compact_patterns = {
+        attack_type: {
+            "count": details.get("count", 0),
+            "preferred_mode": details.get("preferred_mode"),
+            "approved_count": details.get("approved_count", 0),
+            "rejected_count": details.get("rejected_count", 0),
+            "manual_count": details.get("manual_count", 0),
+            "last_reason": details.get("last_reason"),
+        }
+        for attack_type, details in patterns.items()
+    }
+    return {
+        "memory_version": memory.get("memory_version", "v1"),
+        "decision_counts": memory.get("decision_counts", {}),
+        "attack_type_patterns": compact_patterns,
+        "recent_decisions": recent_decisions,
+        "last_incident_id": memory.get("last_incident_id"),
+        "updated_at": memory.get("updated_at"),
+    }
+
+
+def _update_policy_memory(website_id: str, state: dict, decision_stage: str):
+    classification = state.get("classification") or {}
+    policy_decision = state.get("policy_decision") or {}
+    attack = classification.get("attack") or {}
+    if not policy_decision or not attack:
+        return
+
+    memory = _load_policy_memory(website_id)
+    existing_entries = list(memory.get("recent_decisions") or [])
+    attack_id = (state.get("simulation") or {}).get("attack_id") or state.get("attack_id")
+    entry_key = f"{attack_id}:{decision_stage}"
+    existing_entries = [entry for entry in existing_entries if entry.get("entry_key") != entry_key]
+
+    entry = {
+        "entry_key": entry_key,
+        "attack_id": attack_id,
+        "timestamp": utc_now().isoformat(),
+        "decision_stage": decision_stage,
+        "attack_type": classification.get("predicted_class") or attack.get("attack_type"),
+        "severity": attack.get("severity"),
+        "confidence": classification.get("confidence"),
+        "confidence_source": classification.get("confidence_source"),
+        "risk_score": classification.get("risk_score"),
+        "proposed_mode": policy_decision.get("mode"),
+        "reason": policy_decision.get("reason"),
+        "final_approval_status": state.get("approval_status"),
+        "execution_mode": (state.get("action_result") or {}).get("execution_mode"),
+    }
+    existing_entries.append(entry)
+    existing_entries = existing_entries[-30:]
+
+    decision_counts = {"auto_execute": 0, "approval_required": 0, "manual_escalation": 0}
+    for item in existing_entries:
+        mode = item.get("proposed_mode")
+        if mode in decision_counts:
+            decision_counts[mode] += 1
+
+    updated_memory = {
+        "website_id": website_id,
+        "memory_version": "v1",
+        "decision_counts": decision_counts,
+        "attack_type_patterns": _rebuild_attack_type_patterns(existing_entries),
+        "recent_decisions": existing_entries,
+        "last_incident_id": attack_id,
+        "updated_at": utc_now(),
+    }
+    db.policy_memory.update_one({"website_id": website_id}, {"$set": updated_memory}, upsert=True)
+    state["policy_context"] = _policy_memory_summary(updated_memory)
 
 
 async def broadcast(event_type: str, data: dict):
@@ -93,10 +238,12 @@ def _persist_incident(website_id: str, state: dict):
         "agent_trace": state.get("agent_trace", []),
         "agent_messages": state.get("agent_messages", []),
         "agent_discussion": state.get("agent_discussion", []),
+        "reasoning_trace": state.get("reasoning_trace", []),
         "protocol_trace": state.get("protocol_trace", []),
         "tool_trace": state.get("tool_trace", []),
         "runtime_metadata": state.get("runtime_metadata", {}),
         "llm_usage": state.get("llm_usage", {}),
+        "policy_context": state.get("policy_context"),
         "challenge_review": state.get("challenge_review"),
         "notes": state.get("notes", []),
         "assignee": state.get("assignee"),
@@ -276,6 +423,7 @@ async def _broadcast_trace(website_id: str, attack_id: str, state: dict):
                 "agent_trace_entry": entry,
                 "agent_discussion_entry": discussion_entry,
                 "agent_discussion": discussion_entries[: index + 1] if discussion_entry else discussion_entries,
+                "reasoning_trace": state.get("reasoning_trace", [])[: max(index + 1, len(state.get("reasoning_trace", [])))],
                 "policy_decision": state.get("policy_decision"),
                 "runtime_metadata": state.get("runtime_metadata", {}),
             },
@@ -284,6 +432,7 @@ async def _broadcast_trace(website_id: str, attack_id: str, state: dict):
 
 
 async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dict, job_id: str | None = None):
+    policy_memory = _load_policy_memory(website["_id"])
     initial_state = {
         "website": website,
         "simulation": simulation,
@@ -301,7 +450,9 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
         "agent_trace": [],
         "agent_messages": [],
         "agent_discussion": [],
+        "reasoning_trace": [],
         "llm_usage": {},
+        "policy_context": _policy_memory_summary(policy_memory),
         "current_stage": "collector_ingested",
         "notes": [],
         "assignee": None,
@@ -343,6 +494,7 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
     await _broadcast_trace(website["_id"], attack_id, result)
 
     active_incidents[attack_id] = result
+    _update_policy_memory(website["_id"], result, "proposed")
     _persist_incident(website["_id"], result)
     await broadcast(
         "incident_snapshot",
@@ -364,6 +516,7 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
             "agent_trace": result.get("agent_trace"),
             "agent_messages": result.get("agent_messages"),
             "agent_discussion": result.get("agent_discussion"),
+            "reasoning_trace": result.get("reasoning_trace"),
             "protocol_trace": result.get("protocol_trace"),
             "tool_trace": result.get("tool_trace"),
             "runtime_metadata": result.get("runtime_metadata", {}),
@@ -416,6 +569,7 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
             raise
         final_state["website_id"] = website["_id"]
         active_incidents[attack_id] = final_state
+        _update_policy_memory(website["_id"], final_state, "resolved")
         _persist_incident(website["_id"], final_state)
         await broadcast(
             "observability_update",
@@ -441,6 +595,7 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
                 "agent_trace": final_state.get("agent_trace"),
                 "agent_messages": final_state.get("agent_messages"),
                 "agent_discussion": final_state.get("agent_discussion"),
+                "reasoning_trace": final_state.get("reasoning_trace"),
                 "protocol_trace": final_state.get("protocol_trace"),
                 "tool_trace": final_state.get("tool_trace"),
                 "runtime_metadata": final_state.get("runtime_metadata", {}),
@@ -511,6 +666,7 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
                 "agent_trace": final_state.get("agent_trace"),
                 "agent_messages": final_state.get("agent_messages"),
                 "agent_discussion": final_state.get("agent_discussion"),
+                "reasoning_trace": final_state.get("reasoning_trace"),
                 "protocol_trace": final_state.get("protocol_trace"),
                 "tool_trace": final_state.get("tool_trace"),
                 "runtime_metadata": final_state.get("runtime_metadata", {}),
@@ -573,6 +729,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 "agent_trace": 1,
                 "agent_messages": 1,
                 "agent_discussion": 1,
+                "reasoning_trace": 1,
                 "protocol_trace": 1,
                 "tool_trace": 1,
                 "runtime_metadata": 1,
@@ -722,6 +879,12 @@ async def website_telemetry(website_id: str, user=Depends(require_user)):
 async def website_observability(website_id: str, user=Depends(require_user)):
     _get_website_or_404(user["_id"], website_id)
     return _observability_snapshot(website_id)
+
+
+@app.get("/websites/{website_id}/policy-context")
+async def website_policy_context(website_id: str, user=Depends(require_user)):
+    _get_website_or_404(user["_id"], website_id)
+    return _policy_memory_summary(_load_policy_memory(website_id))
 
 
 @app.get("/websites/{website_id}/analytics")
@@ -905,10 +1068,12 @@ async def approve_incident(incident_id: str, body: ApprovalRequest, user=Depends
         "agent_trace": incident.get("agent_trace", []),
         "agent_messages": incident.get("agent_messages", []),
         "agent_discussion": incident.get("agent_discussion", []),
+        "reasoning_trace": incident.get("reasoning_trace", []),
         "protocol_trace": incident.get("protocol_trace", []),
         "tool_trace": incident.get("tool_trace", []),
         "runtime_metadata": incident.get("runtime_metadata", {}),
         "llm_usage": incident.get("llm_usage", {}),
+        "policy_context": incident.get("policy_context") or _policy_memory_summary(_load_policy_memory(incident["website_id"])),
         "current_stage": incident.get("current_stage"),
         "notes": incident.get("notes", []),
         "assignee": incident.get("assignee"),
@@ -929,6 +1094,7 @@ async def approve_incident(incident_id: str, body: ApprovalRequest, user=Depends
             "agent_trace": state.get("agent_trace"),
             "agent_messages": state.get("agent_messages"),
             "agent_discussion": state.get("agent_discussion"),
+            "reasoning_trace": state.get("reasoning_trace"),
             "protocol_trace": state.get("protocol_trace"),
             "tool_trace": state.get("tool_trace"),
             "runtime_metadata": state.get("runtime_metadata", {}),
@@ -953,6 +1119,7 @@ async def approve_incident(incident_id: str, body: ApprovalRequest, user=Depends
         raise
     final_state["website_id"] = incident["website_id"]
     active_incidents[incident_id] = final_state
+    _update_policy_memory(incident["website_id"], final_state, "resolved")
     _persist_incident(incident["website_id"], final_state)
     await broadcast(
         "incident_snapshot",
@@ -976,6 +1143,7 @@ async def approve_incident(incident_id: str, body: ApprovalRequest, user=Depends
             "agent_trace": final_state.get("agent_trace"),
             "agent_messages": final_state.get("agent_messages"),
             "agent_discussion": final_state.get("agent_discussion"),
+            "reasoning_trace": final_state.get("reasoning_trace"),
             "protocol_trace": final_state.get("protocol_trace"),
             "tool_trace": final_state.get("tool_trace"),
             "runtime_metadata": final_state.get("runtime_metadata", {}),
@@ -1008,6 +1176,7 @@ async def approve_incident(incident_id: str, body: ApprovalRequest, user=Depends
             "agent_trace": final_state.get("agent_trace"),
             "agent_messages": final_state.get("agent_messages"),
             "agent_discussion": final_state.get("agent_discussion"),
+            "reasoning_trace": final_state.get("reasoning_trace"),
             "protocol_trace": final_state.get("protocol_trace"),
             "tool_trace": final_state.get("tool_trace"),
             "runtime_metadata": final_state.get("runtime_metadata", {}),

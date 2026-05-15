@@ -1,12 +1,15 @@
 import json
+import logging
 import random
 from collections import Counter, defaultdict
 from typing import TypedDict
 
 from langgraph.graph import END, StateGraph
 
-from gemini_client import call_gemini
+from gemini_client import call_llm_response
 from ml_model import infer as infer_ml_model
+
+logger = logging.getLogger("cyberagent.agents")
 
 
 CLASS_LABELS = ["DDoS", "BruteForce", "PortScan", "SuspiciousRecon"]
@@ -86,7 +89,9 @@ class AgentState(TypedDict, total=False):
     agent_trace: list
     agent_messages: list
     agent_discussion: list
+    reasoning_trace: list
     llm_usage: dict
+    policy_context: dict
     current_stage: str
 
 
@@ -161,6 +166,33 @@ def _record_discussion(
     state["agent_discussion"] = discussion
 
 
+def _record_reasoning(
+    state: AgentState,
+    actor: str,
+    stage: str,
+    kind: str,
+    response_text: str,
+    reasoning_details=None,
+    used: bool = False,
+    runtime: str | None = None,
+    prompt_preview: str | None = None,
+):
+    trace = list(state.get("reasoning_trace", []))
+    trace.append(
+        {
+            "actor": actor,
+            "stage": stage,
+            "kind": kind,
+            "used": used,
+            "runtime": runtime,
+            "response_text": response_text,
+            "reasoning_details": reasoning_details or [],
+            "prompt_preview": (prompt_preview or "")[:400],
+        }
+    )
+    state["reasoning_trace"] = trace
+
+
 def _speak(
     state: AgentState,
     speaker: str,
@@ -171,8 +203,29 @@ def _speak(
     fallback: str,
     kind: str = "statement",
 ):
-    message, used_llm = _llm_text(system_prompt, context_prompt, fallback)
-    _record_discussion(state, speaker, message, stage, audience, kind, "gemini" if used_llm else "fallback")
+    message, llm_meta = _llm_text(system_prompt, context_prompt, fallback)
+    runtime = f"openrouter:{llm_meta.get('model')}" if llm_meta.get("used") and llm_meta.get("model") else "fallback"
+    _record_reasoning(
+        state,
+        speaker,
+        stage,
+        "discussion",
+        message,
+        reasoning_details=llm_meta.get("reasoning_details", []),
+        used=bool(llm_meta.get("used")),
+        runtime=runtime,
+        prompt_preview=context_prompt,
+    )
+    logger.info(
+        "Agent discussion stage=%s speaker=%s audience=%s llm_used=%s runtime=%s message=%s",
+        stage,
+        speaker,
+        audience or "-",
+        bool(llm_meta.get("used")),
+        runtime,
+        message,
+    )
+    _record_discussion(state, speaker, message, stage, audience, kind, "gemini" if llm_meta.get("used") else "fallback")
 
 
 def _mark_llm_usage(state: AgentState, agent: str, used: bool, runtime: str | None = None):
@@ -182,6 +235,7 @@ def _mark_llm_usage(state: AgentState, agent: str, used: bool, runtime: str | No
     if runtime:
         usage[agent]["runtime"] = runtime
     state["llm_usage"] = usage
+    logger.info("LLM usage agent=%s used=%s runtime=%s", agent, used, runtime or "fallback")
 
 
 def _normalize_scores(raw_scores, predicted_class):
@@ -204,11 +258,11 @@ def _extract_ml_features(anomaly: dict, telemetry: dict) -> dict:
 
 def _llm_json(system_prompt: str, task_prompt: str):
     combined_prompt = f"{system_prompt}\n\n{task_prompt}".strip()
-    response = call_gemini(combined_prompt)
-    return json.loads(_clean_json_payload(response))
+    response = call_llm_response(combined_prompt, enable_reasoning=False)
+    return json.loads(_clean_json_payload(response.get("text", ""))), response
 
 
-def _llm_text(system_prompt: str, task_prompt: str, fallback: str) -> tuple[str, bool]:
+def _llm_text(system_prompt: str, task_prompt: str, fallback: str) -> tuple[str, dict]:
     combined_prompt = f"""
 {system_prompt}
 
@@ -221,13 +275,16 @@ Rules:
 - no JSON
 - no speaker label
 """.strip()
-    response = call_gemini(combined_prompt).strip()
+    result = call_llm_response(combined_prompt, enable_reasoning=True)
+    response = (result.get("text") or "").strip()
     if not response:
-        return fallback, False
+        return fallback, result
     cleaned = _clean_json_payload(response).strip().strip('"').strip("'")
-    if not cleaned or cleaned.startswith("{") or "Gemini unavailable" in cleaned:
-        return fallback, False
-    return cleaned, True
+    if not cleaned or cleaned.startswith("{") or "OpenRouter unavailable" in cleaned:
+        result["used"] = False
+        return fallback, result
+    result["text"] = cleaned
+    return cleaned, result
 
 
 def normalization(state: AgentState) -> AgentState:
@@ -435,14 +492,25 @@ Rules:
 - return JSON only
 """.strip()
     try:
-        parsed = _llm_json(DETECTION_SYSTEM_PROMPT, llm_detection_prompt)
+        parsed, llm_meta = _llm_json(DETECTION_SYSTEM_PROMPT, llm_detection_prompt)
+        _record_reasoning(
+            state,
+            "Detection Agent",
+            "detection",
+            "json",
+            llm_meta.get("text", ""),
+            reasoning_details=llm_meta.get("reasoning_details", []),
+            used=bool(llm_meta.get("used")),
+            runtime=f"openrouter:{llm_meta.get('model')}" if llm_meta.get("used") and llm_meta.get("model") else "fallback",
+            prompt_preview=llm_detection_prompt,
+        )
         if isinstance(parsed, dict):
             anomaly_type = str(parsed.get("anomaly_type") or anomaly_type).strip() or anomaly_type
             severity = str(parsed.get("severity") or severity).upper()
             summary = str(parsed.get("summary") or summary).strip() or summary
             llm_candidates = [label for label in parsed.get("candidate_labels", []) if label in CLASS_LABELS]
             candidate_labels = llm_candidates or candidate_labels
-            _mark_llm_usage(state, "Detection Agent", True, "direct_gemini")
+            _mark_llm_usage(state, "Detection Agent", True, f"openrouter:{llm_meta.get('model')}" if llm_meta.get("model") else "openrouter")
         else:
             _mark_llm_usage(state, "Detection Agent", False)
     except Exception:
@@ -705,7 +773,18 @@ Rules:
 """.strip()
 
     try:
-        parsed = _llm_json(CLASSIFIER_SYSTEM_PROMPT, classifier_prompt)
+        parsed, llm_meta = _llm_json(CLASSIFIER_SYSTEM_PROMPT, classifier_prompt)
+        _record_reasoning(
+            state,
+            "Threat Classification Agent",
+            "classification",
+            "json",
+            llm_meta.get("text", ""),
+            reasoning_details=llm_meta.get("reasoning_details", []),
+            used=bool(llm_meta.get("used")),
+            runtime=f"openrouter:{llm_meta.get('model')}" if llm_meta.get("used") and llm_meta.get("model") else "fallback",
+            prompt_preview=classifier_prompt,
+        )
         if isinstance(parsed, dict):
             llm_class = parsed.get("predicted_class")
             raw_confidence = parsed.get("confidence")
@@ -721,7 +800,7 @@ Rules:
                 severity = parsed.get("severity", severity)
                 confidence_source = "ml_model_plus_llm_review"
                 reasoning = parsed.get("reasoning", reasoning)
-                _mark_llm_usage(state, "Threat Classification Agent", True, "direct_gemini")
+                _mark_llm_usage(state, "Threat Classification Agent", True, f"openrouter:{llm_meta.get('model')}" if llm_meta.get("model") else "openrouter")
             else:
                 _mark_llm_usage(state, "Threat Classification Agent", False)
         else:
@@ -859,10 +938,21 @@ Rules:
 - return JSON only
 """.strip()
     try:
-        parsed = _llm_json(CHALLENGE_SYSTEM_PROMPT, prompt)
+        parsed, llm_meta = _llm_json(CHALLENGE_SYSTEM_PROMPT, prompt)
+        _record_reasoning(
+            state,
+            "Challenge Agent",
+            "challenge_review",
+            "json",
+            llm_meta.get("text", ""),
+            reasoning_details=llm_meta.get("reasoning_details", []),
+            used=bool(llm_meta.get("used")),
+            runtime=f"openrouter:{llm_meta.get('model')}" if llm_meta.get("used") and llm_meta.get("model") else "fallback",
+            prompt_preview=prompt,
+        )
         if isinstance(parsed, dict):
             fallback.update(parsed)
-            _mark_llm_usage(state, "Challenge Agent", True, "direct_gemini")
+            _mark_llm_usage(state, "Challenge Agent", True, f"openrouter:{llm_meta.get('model')}" if llm_meta.get("model") else "openrouter")
         else:
             _mark_llm_usage(state, "Challenge Agent", False)
     except Exception:
@@ -1013,11 +1103,22 @@ Rules:
 
     fallback = _fallback_mitigation_plan(state)
     try:
-        parsed = _llm_json(RESPONSE_SYSTEM_PROMPT, prompt)
+        parsed, llm_meta = _llm_json(RESPONSE_SYSTEM_PROMPT, prompt)
+        _record_reasoning(
+            state,
+            "Response Planning Agent",
+            "response_planning",
+            "json",
+            llm_meta.get("text", ""),
+            reasoning_details=llm_meta.get("reasoning_details", []),
+            used=bool(llm_meta.get("used")),
+            runtime=f"openrouter:{llm_meta.get('model')}" if llm_meta.get("used") and llm_meta.get("model") else "fallback",
+            prompt_preview=prompt,
+        )
         if not isinstance(parsed, dict) or "steps" not in parsed:
             raise ValueError("Invalid mitigation plan")
         state["mitigation_plan"] = parsed
-        _mark_llm_usage(state, "Response Planning Agent", True, "direct_gemini")
+        _mark_llm_usage(state, "Response Planning Agent", True, f"openrouter:{llm_meta.get('model')}" if llm_meta.get("model") else "openrouter")
     except Exception:
         state["mitigation_plan"] = fallback
         _mark_llm_usage(state, "Response Planning Agent", False)
@@ -1068,6 +1169,8 @@ def _fallback_policy_decision(state: AgentState):
     attack = classification["attack"]
     risk_score = classification["risk_score"]
     challenge_data = state.get("challenge_review") or {}
+    policy_context = state.get("policy_context") or {}
+    prior_pattern = (policy_context.get("attack_type_patterns") or {}).get(attack["attack_type"], {})
     if challenge_data.get("challenge_outcome") == "challenge":
         return "approval_required", "Challenge Agent flagged ambiguity in the primary verdict, so analyst approval is required."
     if attack["attack_type"] == "BruteForce" and risk_score < 90:
@@ -1085,6 +1188,9 @@ def _fallback_policy_decision(state: AgentState):
     else:
         mode = "manual_escalation"
         reason = "The evidence is ambiguous and requires a human analyst."
+    preferred_mode = prior_pattern.get("preferred_mode")
+    if preferred_mode and prior_pattern.get("count", 0) >= 3 and mode != "manual_escalation":
+        reason = f"{reason} Historical policy memory for {attack['attack_type']} incidents has usually favored {preferred_mode}."
     return mode, reason
 
 
@@ -1093,6 +1199,7 @@ def policy(state: AgentState) -> AgentState:
     mitigation_plan = state["mitigation_plan"]
     investigation_data = _ensure_investigation_context(state)
     challenge_data = state.get("challenge_review") or {}
+    policy_context = state.get("policy_context") or {}
     attack = classification["attack"]
 
     mode, reason = _fallback_policy_decision(state)
@@ -1104,6 +1211,7 @@ Policy review request:
 - Confidence source: {classification["confidence_source"]}
 - Risk score: {classification["risk_score"]}
 - Challenge review: {challenge_data}
+- Policy memory summary: {policy_context}
 - Investigation urgency: {investigation_data.get("urgency")}
 - Investigation summary: {investigation_data["summary"]}
 - Mitigation strategy: {mitigation_plan["strategy"]}
@@ -1128,14 +1236,25 @@ Rules:
     safety_notes = []
     decision_source = "heuristic"
     try:
-        parsed = _llm_json(POLICY_SYSTEM_PROMPT, policy_prompt)
+        parsed, llm_meta = _llm_json(POLICY_SYSTEM_PROMPT, policy_prompt)
+        _record_reasoning(
+            state,
+            "Policy Agent",
+            "policy_decision",
+            "json",
+            llm_meta.get("text", ""),
+            reasoning_details=llm_meta.get("reasoning_details", []),
+            used=bool(llm_meta.get("used")),
+            runtime=f"openrouter:{llm_meta.get('model')}" if llm_meta.get("used") and llm_meta.get("model") else "fallback",
+            prompt_preview=policy_prompt,
+        )
         mode = parsed.get("mode", mode)
         if mode not in {"auto_execute", "approval_required", "manual_escalation"}:
-            mode = mode
+            mode = _fallback_policy_decision(state)[0]
         reason = parsed.get("reason", reason)
         safety_notes = parsed.get("safety_notes", [])
         decision_source = "llm_reviewed"
-        _mark_llm_usage(state, "Policy Agent", True, "direct_gemini")
+        _mark_llm_usage(state, "Policy Agent", True, f"openrouter:{llm_meta.get('model')}" if llm_meta.get("model") else "openrouter")
     except Exception:
         _mark_llm_usage(state, "Policy Agent", False)
 
@@ -1146,6 +1265,7 @@ Rules:
         "auto_execute": mode == "auto_execute",
         "safe_actions": [step["action"] for step in mitigation_plan.get("steps", []) if step.get("reversible")],
         "safety_notes": safety_notes,
+        "policy_memory_considered": bool(policy_context),
     }
     state["approval_status"] = (
         "auto_approved" if mode == "auto_execute" else "pending" if mode == "approval_required" else "manual_required"
@@ -1365,11 +1485,22 @@ Return JSON only.
 
     fallback = _fallback_incident_report(state, resolved_in)
     try:
-        parsed = _llm_json(REPORT_SYSTEM_PROMPT, prompt)
+        parsed, llm_meta = _llm_json(REPORT_SYSTEM_PROMPT, prompt)
+        _record_reasoning(
+            state,
+            "Reporting Agent",
+            "report",
+            "json",
+            llm_meta.get("text", ""),
+            reasoning_details=llm_meta.get("reasoning_details", []),
+            used=bool(llm_meta.get("used")),
+            runtime=f"openrouter:{llm_meta.get('model')}" if llm_meta.get("used") and llm_meta.get("model") else "fallback",
+            prompt_preview=prompt,
+        )
         if not isinstance(parsed, dict) or "executive_summary" not in parsed:
             raise ValueError("Invalid incident report")
         state["incident_report"] = parsed
-        _mark_llm_usage(state, "Reporting Agent", True, "direct_gemini")
+        _mark_llm_usage(state, "Reporting Agent", True, f"openrouter:{llm_meta.get('model')}" if llm_meta.get("model") else "openrouter")
     except Exception:
         state["incident_report"] = fallback
         _mark_llm_usage(state, "Reporting Agent", False)
