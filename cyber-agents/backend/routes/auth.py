@@ -28,6 +28,7 @@ async def signup(payload: SignupRequest):
     user = {
         "name": payload.name.strip(),
         "email": payload.email.lower(),
+        "role": "owner",
         "password_hash": password_data["hash"],
         "password_salt": password_data["salt"],
         "session_token": token,

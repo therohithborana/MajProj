@@ -6,10 +6,29 @@ from typing import TypedDict
 from langgraph.graph import END, StateGraph
 
 from gemini_client import call_gemini
+from ml_model import infer as infer_ml_model
 
 
 CLASS_LABELS = ["DDoS", "BruteForce", "PortScan", "SuspiciousRecon"]
 SENSITIVE_PATH_TOKENS = ("/admin", "/.env", "phpmyadmin", "wp-admin", "server-status", "config", "backup")
+
+NORMALIZATION_SYSTEM_PROMPT = """
+You are the Normalization Agent in an AI cybersecurity platform.
+Your role is to convert raw collector telemetry into a consistent event schema and brief the next agent clearly.
+When asked for discussion, speak like a SOC operator in one concise natural sentence.
+""".strip()
+
+DETECTION_SYSTEM_PROMPT = """
+You are the Detection Agent in an AI cybersecurity platform.
+Your role is to inspect normalized access, auth, and network telemetry for suspicious patterns and flag likely threats.
+When asked for discussion, speak like a SOC operator in one concise natural sentence.
+""".strip()
+
+CORRELATION_SYSTEM_PROMPT = """
+You are the Correlation Agent in an AI cybersecurity platform.
+Your role is to group related suspicious events into a single incident storyline with source, target, and timing context.
+When asked for discussion, speak like a SOC operator in one concise natural sentence.
+""".strip()
 
 CLASSIFIER_SYSTEM_PROMPT = """
 You are the Threat Classification Agent in an AI cybersecurity platform.
@@ -38,10 +57,22 @@ Your role is to propose safe, practical Linux mitigation commands for the observ
 Return strict JSON only.
 """.strip()
 
+CHALLENGE_SYSTEM_PROMPT = """
+You are the Challenge Agent in an AI cybersecurity platform.
+Your role is to challenge the primary classifier and identify false-positive risk, missing evidence, and safer alternative interpretations.
+Return strict JSON only.
+""".strip()
+
 REPORT_SYSTEM_PROMPT = """
 You are the Reporting Agent in an AI cybersecurity platform.
 Your role is to write a concise but professional incident report for analysts and stakeholders.
 Return strict JSON only.
+""".strip()
+
+ACTION_SYSTEM_PROMPT = """
+You are the Action Agent in an AI cybersecurity platform.
+Your role is to execute the approved response path or escalate the incident safely for human responders.
+When asked for discussion, speak like a SOC operator in one concise natural sentence.
 """.strip()
 
 
@@ -52,6 +83,7 @@ class AgentState(TypedDict, total=False):
     anomaly: dict
     correlation: dict
     classification: dict
+    challenge_review: dict
     investigation: dict
     mitigation_plan: dict
     policy_decision: dict
@@ -60,6 +92,7 @@ class AgentState(TypedDict, total=False):
     incident_report: dict
     agent_trace: list
     agent_messages: list
+    agent_discussion: list
     llm_usage: dict
     current_stage: str
 
@@ -112,6 +145,41 @@ def _record_message(
     state["agent_messages"] = messages
 
 
+def _record_discussion(
+    state: AgentState,
+    speaker: str,
+    message: str,
+    stage: str,
+    audience: str | None = None,
+    kind: str = "statement",
+):
+    discussion = list(state.get("agent_discussion", []))
+    discussion.append(
+        {
+            "speaker": speaker,
+            "audience": audience,
+            "message": message,
+            "stage": stage,
+            "kind": kind,
+        }
+    )
+    state["agent_discussion"] = discussion
+
+
+def _speak(
+    state: AgentState,
+    speaker: str,
+    stage: str,
+    audience: str | None,
+    system_prompt: str,
+    context_prompt: str,
+    fallback: str,
+    kind: str = "statement",
+):
+    message = _llm_text(system_prompt, context_prompt, fallback)
+    _record_discussion(state, speaker, message, stage, audience, kind)
+
+
 def _mark_llm_usage(state: AgentState, agent: str, used: bool, runtime: str | None = None):
     existing = state.get("llm_usage") or {}
     usage = dict(existing)
@@ -132,10 +200,48 @@ def _normalize_scores(raw_scores, predicted_class):
     return normalized
 
 
+def _extract_ml_features(anomaly: dict, telemetry: dict) -> dict:
+    total_events = max(int(telemetry.get("total_events_observed") or 0), 1)
+    total_packets = int(anomaly.get("total_packets_observed") or 0)
+    total_bytes = int(anomaly.get("total_bytes_observed") or 0)
+    return {
+        "request_burst": float(anomaly.get("request_burst") or 0),
+        "failed_auth_attempts": float(anomaly.get("failed_auth_attempts") or 0),
+        "port_span": float(anomaly.get("port_span") or 0),
+        "suspicious_path_hits": float(anomaly.get("suspicious_path_hits") or 0),
+        "unique_sources": float(len(anomaly.get("src_ips") or [])),
+        "packet_rate": round(total_packets / total_events, 4),
+        "bytes_rate": round(total_bytes / total_events, 4),
+        "syn_event_count": float(anomaly.get("syn_event_count") or 0),
+    }
+
+
 def _llm_json(system_prompt: str, task_prompt: str):
     combined_prompt = f"{system_prompt}\n\n{task_prompt}".strip()
     response = call_gemini(combined_prompt)
     return json.loads(_clean_json_payload(response))
+
+
+def _llm_text(system_prompt: str, task_prompt: str, fallback: str) -> str:
+    combined_prompt = f"""
+{system_prompt}
+
+{task_prompt}
+
+Rules:
+- return plain text only
+- one short natural utterance
+- no markdown
+- no JSON
+- no speaker label
+""".strip()
+    response = call_gemini(combined_prompt).strip()
+    if not response:
+        return fallback
+    cleaned = _clean_json_payload(response).strip().strip('"').strip("'")
+    if not cleaned or cleaned.startswith("{") or "Gemini unavailable" in cleaned:
+        return fallback
+    return cleaned
 
 
 def normalization(state: AgentState) -> AgentState:
@@ -199,6 +305,22 @@ def normalization(state: AgentState) -> AgentState:
         "Normalized telemetry bundle",
         "Telemetry is normalized and grouped into access, auth, and network channels.",
         state["telemetry"]["normalization_brief"],
+    )
+    _speak(
+        state,
+        "Normalization Agent",
+        "normalization",
+        "Detection Agent",
+        NORMALIZATION_SYSTEM_PROMPT,
+        f"""
+Speak to the Detection Agent after normalization.
+- Total events: {len(normalized_events)}
+- Event counts: {dict(event_counts)}
+- Unique sources: {len(unique_sources)}
+- Goal: hand off the normalized telemetry for threat inspection
+""".strip(),
+        f"I normalized {len(normalized_events)} events across access, auth, and network channels. Detection Agent, please inspect them for suspicious patterns.",
+        "handoff",
     )
     return state
 
@@ -349,6 +471,32 @@ def detection(state: AgentState) -> AgentState:
             "heuristics": state["anomaly"]["heuristic_summary"],
         },
     )
+    detection_message = (
+        f"I'm seeing {max_failed_auth} failed login attempts from {primary_src_ip} against {dominant_target}."
+        if max_failed_auth >= 10
+        else f"I'm seeing a likely {anomaly_type.replace('_', ' ')} pattern centered on {primary_src_ip}."
+    )
+    _speak(
+        state,
+        "Detection Agent",
+        "detection",
+        "Correlation Agent",
+        DETECTION_SYSTEM_PROMPT,
+        f"""
+Speak to the Correlation Agent after first-pass detection.
+- Detection summary: {summary}
+- Candidate labels: {candidate_labels or ["Baseline"]}
+- Primary source: {primary_src_ip}
+- Target: {dominant_target}:{target_port}
+- Failed auth attempts: {max_failed_auth}
+- Request burst: {request_burst}
+- Port span: {scan_span}
+- Suspicious path hits: {suspicious_path_hits}
+- Ask for correlation of the related events
+""".strip(),
+        f"{detection_message} Correlation Agent, can you connect the related events and confirm the storyline?",
+        "question",
+    )
     return state
 
 
@@ -399,6 +547,24 @@ def correlation(state: AgentState) -> AgentState:
         "Correlated evidence bundle",
         "Evidence has been grouped around the primary source and likely target.",
         state["correlation"]["correlation_brief"],
+    )
+    _speak(
+        state,
+        "Correlation Agent",
+        "correlation",
+        "Threat Classification Agent",
+        CORRELATION_SYSTEM_PROMPT,
+        f"""
+Speak to the Threat Classification Agent after correlation.
+- Primary source: {primary_src}
+- Target: {anomaly["target_ip"]}:{anomaly["target_port"]}
+- Correlated event count: {len(correlated)}
+- Affected paths: {affected_paths}
+- Affected ports: {affected_ports}
+- Goal: hand off the correlated evidence for classification
+""".strip(),
+        f"I linked {len(correlated)} related events around source {primary_src} and target {anomaly['target_ip']}. Threat Classification Agent, please classify the attack type.",
+        "handoff",
     )
     return state
 
@@ -462,10 +628,14 @@ def threat_classification(state: AgentState) -> AgentState:
     correlation_data = state["correlation"]
 
     predicted_class, confidence, confidence_scores, risk_score, severity, attack = _heuristic_classification(anomaly, telemetry, state)
-    confidence_source = "heuristic"
+    ml_result = infer_ml_model(_extract_ml_features(anomaly, telemetry))
+    predicted_class = ml_result["predicted_class"]
+    confidence = ml_result["confidence"]
+    confidence_scores = ml_result["confidence_scores"]
+    confidence_source = "ml_model"
     reasoning = [
-        f"Candidate labels from detection: {', '.join(anomaly['candidate_labels'])}.",
-        f"Primary source {attack['primary_src_ip']} generated correlated access/auth/network activity.",
+        f"Model-backed classification considered candidate labels: {', '.join(anomaly['candidate_labels'])}.",
+        f"Feature vector matched the {predicted_class} profile with confidence {round(confidence * 100, 1)}%.",
     ]
 
     classifier_prompt = f"""
@@ -514,10 +684,13 @@ Rules:
                 llm_scores = _normalize_scores(parsed.get("confidence_scores", {}), llm_class)
                 llm_conf = round(float(raw_confidence), 4)
                 predicted_class = llm_class
-                confidence_scores = llm_scores
-                confidence = min(max(llm_conf, 0.0), 1.0)
+                confidence_scores = {
+                    label: round((confidence_scores.get(label, 0.0) + llm_scores.get(label, 0.0)) / 2, 4)
+                    for label in CLASS_LABELS
+                }
+                confidence = round(min(max((confidence + llm_conf) / 2, 0.0), 1.0), 4)
                 severity = parsed.get("severity", severity)
-                confidence_source = "llm_reviewed"
+                confidence_source = "ml_model_plus_llm_review"
                 reasoning = parsed.get("reasoning", reasoning)
                 _mark_llm_usage(state, "Threat Classification Agent", True, "direct_gemini")
             else:
@@ -553,6 +726,7 @@ Rules:
         "confidence": confidence,
         "confidence_source": confidence_source,
         "confidence_scores": confidence_scores,
+        "model_prediction": ml_result,
         "reasoning": reasoning,
         "key_indicators": key_indicators,
         "risk_score": risk_score,
@@ -581,6 +755,24 @@ Rules:
         "The correlated evidence has been classified and is ready for analyst-style investigation.",
         state["classification"]["classification_brief"],
     )
+    _speak(
+        state,
+        "Threat Classification Agent",
+        "classification",
+        "Challenge Agent",
+        CLASSIFIER_SYSTEM_PROMPT,
+        f"""
+Speak to the Challenge Agent after classification.
+- Predicted class: {predicted_class}
+- Confidence: {confidence}
+- Confidence source: {confidence_source}
+- Candidate labels: {anomaly["candidate_labels"]}
+- Risk score: {risk_score}
+- Ask for a challenge review of the verdict
+""".strip(),
+        f"Based on the evidence, this looks like {predicted_class} with {round(confidence * 100, 1)}% confidence from {confidence_source}. Challenge Agent, please review whether this verdict is too aggressive or if another class fits better.",
+        "question",
+    )
     return state
 
 
@@ -608,11 +800,109 @@ def _fallback_investigation(state: AgentState):
     }
 
 
+def challenge_review(state: AgentState) -> AgentState:
+    classification = state["classification"]
+    anomaly = state["anomaly"]
+    fallback = {
+        "confidence_in_primary": classification["confidence"],
+        "alternative_class": "SuspiciousRecon" if classification["predicted_class"] != "SuspiciousRecon" else "PortScan",
+        "challenge_outcome": "support",
+        "false_positive_risk": "LOW" if classification["confidence"] >= 0.75 else "MEDIUM",
+        "notes": [
+            "Primary classification is supported by the dominant heuristic and model signals.",
+            "No major contradiction was found between the telemetry channels.",
+        ],
+    }
+    prompt = f"""
+Challenge review request:
+- Primary classification: {classification["predicted_class"]}
+- Confidence: {classification["confidence"]}
+- Confidence source: {classification["confidence_source"]}
+- Risk score: {classification["risk_score"]}
+- Detection summary: {anomaly["summary"]}
+- Candidate labels: {anomaly["candidate_labels"]}
+- Model prediction: {classification.get("model_prediction")}
+
+Return a JSON object with exactly this structure:
+{{
+  "confidence_in_primary": 0.0,
+  "alternative_class": "one of DDoS, BruteForce, PortScan, SuspiciousRecon",
+  "challenge_outcome": "support or challenge",
+  "false_positive_risk": "LOW/MEDIUM/HIGH",
+  "notes": ["note 1", "note 2"]
+}}
+
+Rules:
+- if the evidence is strong, return challenge_outcome as support
+- if there is a plausible second interpretation, include it
+- return JSON only
+""".strip()
+    try:
+        parsed = _llm_json(CHALLENGE_SYSTEM_PROMPT, prompt)
+        if isinstance(parsed, dict):
+            fallback.update(parsed)
+            _mark_llm_usage(state, "Challenge Agent", True, "direct_gemini")
+        else:
+            _mark_llm_usage(state, "Challenge Agent", False)
+    except Exception:
+        _mark_llm_usage(state, "Challenge Agent", False)
+
+    state["challenge_review"] = fallback
+    state["current_stage"] = "challenge_review"
+    _trace(
+        state,
+        "Challenge Agent",
+        "challenge_review",
+        f"Reviewed the {classification['predicted_class']} verdict and returned {fallback['challenge_outcome']} with {fallback['false_positive_risk']} false-positive risk.",
+        {
+            "alternative_class": fallback["alternative_class"],
+            "challenge_outcome": fallback["challenge_outcome"],
+            "false_positive_risk": fallback["false_positive_risk"],
+        },
+    )
+    _record_message(
+        state,
+        "Challenge Agent",
+        "Investigation Agent",
+        "Classifier challenge review",
+        "Primary classification has been challenged or supported and is ready for investigation.",
+        state["challenge_review"],
+    )
+    if fallback["challenge_outcome"] == "challenge":
+        challenge_message = (
+            f"I don't fully agree with the primary verdict. {fallback['alternative_class']} is also plausible, and I rate false-positive risk as {fallback['false_positive_risk']}."
+        )
+    else:
+        challenge_message = (
+            f"I agree with the primary verdict. The evidence supports {classification['predicted_class']}, and false-positive risk is {fallback['false_positive_risk']}."
+        )
+    _speak(
+        state,
+        "Challenge Agent",
+        "challenge_review",
+        "Investigation Agent",
+        CHALLENGE_SYSTEM_PROMPT,
+        f"""
+Speak to the Investigation Agent after reviewing the primary classification.
+- Primary class: {classification["predicted_class"]}
+- Challenge outcome: {fallback["challenge_outcome"]}
+- Alternative class: {fallback["alternative_class"]}
+- False-positive risk: {fallback["false_positive_risk"]}
+- Notes: {fallback["notes"]}
+- Goal: tell the Investigation Agent how much to trust the primary verdict
+""".strip(),
+        f"{challenge_message} Investigation Agent, continue with this review context.",
+        "reply",
+    )
+    return state
+
+
 def investigation(state: AgentState) -> AgentState:
     classification = state["classification"]
     anomaly = state["anomaly"]
     correlation_data = state["correlation"]
     attack = classification["attack"]
+    challenge_data = state.get("challenge_review") or {}
     fallback = _fallback_investigation(state)
 
     investigator_prompt = f"""
@@ -622,6 +912,7 @@ Investigation request:
 - Confidence: {classification["confidence"]}
 - Confidence source: {classification["confidence_source"]}
 - Risk score: {classification["risk_score"]}
+- Challenge review: {challenge_data}
 - Detection summary: {anomaly["summary"]}
 - Correlation brief: {correlation_data["correlation_brief"]}
 - Evidence timeline: {correlation_data["timeline"]}
@@ -684,6 +975,23 @@ Rules:
             "affected_assets": state["investigation"]["affected_assets"],
             "urgency": state["investigation"].get("urgency"),
         },
+    )
+    _speak(
+        state,
+        "Investigation Agent",
+        "investigation",
+        "Response Planning Agent",
+        INVESTIGATOR_SYSTEM_PROMPT,
+        f"""
+Speak to the Response Planning Agent after building the incident brief.
+- Summary: {state["investigation"]["summary"]}
+- Affected assets: {state["investigation"]["affected_assets"]}
+- Urgency: {state["investigation"].get("urgency")}
+- Recommended owner: {state["investigation"].get("recommended_owner")}
+- Goal: hand off context for containment planning
+""".strip(),
+        f"I built the incident brief and timeline. The affected asset is {attack['target_ip']}:{attack['target_port']}, and the urgency is {state['investigation'].get('urgency')}. Response Planning Agent, prepare containment options.",
+        "handoff",
     )
     return state
 
@@ -803,6 +1111,24 @@ Rules:
             "steps": len(state["mitigation_plan"].get("steps", [])),
         },
     )
+    _speak(
+        state,
+        "Response Planning Agent",
+        "response_planning",
+        "Policy Agent",
+        RESPONSE_SYSTEM_PROMPT,
+        f"""
+Speak to the Policy Agent after drafting the mitigation plan.
+- Strategy: {state["mitigation_plan"]["strategy"]}
+- Collateral risk: {state["mitigation_plan"]["collateral_risk"]}
+- Steps: {len(state["mitigation_plan"].get("steps", []))}
+- Attack type: {attack["attack_type"]}
+- Target: {attack["target_ip"]}:{attack["target_port"]}
+- Goal: ask whether the plan is safe for automatic execution
+""".strip(),
+        f"I drafted the containment plan '{state['mitigation_plan']['strategy']}' with {len(state['mitigation_plan'].get('steps', []))} steps. Policy Agent, decide whether we can execute this automatically.",
+        "question",
+    )
     return state
 
 
@@ -810,6 +1136,9 @@ def _fallback_policy_decision(state: AgentState):
     classification = state["classification"]
     attack = classification["attack"]
     risk_score = classification["risk_score"]
+    challenge_data = state.get("challenge_review") or {}
+    if challenge_data.get("challenge_outcome") == "challenge":
+        return "approval_required", "Challenge Agent flagged ambiguity in the primary verdict, so analyst approval is required."
     if attack["attack_type"] == "BruteForce" and risk_score < 90:
         mode = "auto_execute"
         reason = "Credential abuse can be contained with reversible low-blast-radius actions."
@@ -832,6 +1161,7 @@ def policy(state: AgentState) -> AgentState:
     classification = state["classification"]
     mitigation_plan = state["mitigation_plan"]
     investigation_data = state["investigation"]
+    challenge_data = state.get("challenge_review") or {}
     attack = classification["attack"]
 
     mode, reason = _fallback_policy_decision(state)
@@ -842,6 +1172,7 @@ Policy review request:
 - Confidence: {classification["confidence"]}
 - Confidence source: {classification["confidence_source"]}
 - Risk score: {classification["risk_score"]}
+- Challenge review: {challenge_data}
 - Investigation urgency: {investigation_data.get("urgency")}
 - Investigation summary: {investigation_data["summary"]}
 - Mitigation strategy: {mitigation_plan["strategy"]}
@@ -908,6 +1239,28 @@ Rules:
             "decision_source": decision_source,
         },
     )
+    policy_messages = {
+        "auto_execute": "The actions are reversible and low blast radius, so we can proceed automatically.",
+        "approval_required": "I don't want to execute this blindly on a customer-facing service, so human approval is required.",
+        "manual_escalation": "The evidence is too ambiguous for safe automation, so this needs manual escalation.",
+    }
+    _speak(
+        state,
+        "Policy Agent",
+        "policy_decision",
+        "Action Agent",
+        POLICY_SYSTEM_PROMPT,
+        f"""
+Speak to the Action Agent after policy review.
+- Mode: {mode}
+- Reason: {reason}
+- Decision source: {decision_source}
+- Safety notes: {safety_notes}
+- Goal: explain the execution decision clearly
+""".strip(),
+        policy_messages.get(mode, reason),
+        "decision",
+    )
     return state
 
 
@@ -966,6 +1319,28 @@ def action(state: AgentState) -> AgentState:
             "status": action_result["status"],
             "execution_mode": action_result["execution_mode"],
         },
+    )
+    if decision in {"approved", "auto_approved"}:
+        action_message = "Containment is approved. I'm executing the response steps now and blocking the suspicious source traffic."
+    elif decision == "rejected":
+        action_message = "The analyst rejected automated containment, so I'm moving this incident into the manual response queue."
+    else:
+        action_message = "Policy escalation requires manual intervention, so I'm creating the handoff for human responders."
+    _speak(
+        state,
+        "Action Agent",
+        "action",
+        "Reporting Agent",
+        ACTION_SYSTEM_PROMPT,
+        f"""
+Speak to the Reporting Agent after the action stage.
+- Approval decision: {decision}
+- Action status: {action_result["status"]}
+- Execution mode: {action_result["execution_mode"]}
+- Goal: tell reporting what happened operationally
+""".strip(),
+        f"{action_message} Reporting Agent, prepare the final incident summary.",
+        "handoff",
     )
     return state
 
@@ -1079,6 +1454,23 @@ Return JSON only.
         "Generated the final incident summary and recommendations.",
         {"report_id": state["incident_report"]["report_id"]},
     )
+    _speak(
+        state,
+        "Reporting Agent",
+        "report",
+        "SOC Dashboard",
+        REPORT_SYSTEM_PROMPT,
+        f"""
+Speak to the SOC Dashboard after final reporting.
+- Report ID: {state["incident_report"]["report_id"]}
+- Executive summary: {state["incident_report"]["executive_summary"]}
+- Response: {status}
+- Policy mode: {policy_mode}
+- Goal: summarize the outcome in one short natural utterance
+""".strip(),
+        f"I compiled the final incident report. Summary: {state['incident_report']['executive_summary']}",
+        "summary",
+    )
     return state
 
 
@@ -1087,6 +1479,7 @@ _detection_builder.add_node("normalization", normalization)
 _detection_builder.add_node("detection", detection)
 _detection_builder.add_node("correlation_agent", correlation)
 _detection_builder.add_node("threat_classification", threat_classification)
+_detection_builder.add_node("challenge_agent", challenge_review)
 _detection_builder.add_node("investigation_agent", investigation)
 _detection_builder.add_node("threat_resolve", threat_resolve)
 _detection_builder.add_node("policy", policy)
@@ -1094,7 +1487,8 @@ _detection_builder.set_entry_point("normalization")
 _detection_builder.add_edge("normalization", "detection")
 _detection_builder.add_edge("detection", "correlation_agent")
 _detection_builder.add_edge("correlation_agent", "threat_classification")
-_detection_builder.add_edge("threat_classification", "investigation_agent")
+_detection_builder.add_edge("threat_classification", "challenge_agent")
+_detection_builder.add_edge("challenge_agent", "investigation_agent")
 _detection_builder.add_edge("investigation_agent", "threat_resolve")
 _detection_builder.add_edge("threat_resolve", "policy")
 _detection_builder.add_edge("policy", END)

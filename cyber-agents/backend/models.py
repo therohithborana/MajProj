@@ -68,6 +68,14 @@ class ApprovalRequest(BaseModel):
     decision: str
 
 
+class IncidentNoteRequest(BaseModel):
+    note: str = Field(min_length=2, max_length=4000)
+
+
+class IncidentAssignRequest(BaseModel):
+    assignee: str = Field(min_length=2, max_length=120)
+
+
 class IngestEvent(BaseModel):
     event_type: Literal["access", "auth", "network"]
     timestamp: Optional[datetime] = None

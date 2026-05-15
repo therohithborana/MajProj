@@ -5,7 +5,7 @@ import json
 import uuid
 
 from bson import ObjectId
-from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pymongo.errors import OperationFailure
@@ -20,7 +20,7 @@ from agent_protocols import (
 from auth import require_collector, require_user
 from db import db, init_db
 from mcp_tools import McpMultiAgentCoordinator
-from models import AGUIRunRequest, A2AInvokeRequest, ApprovalRequest, CollectorIngestRequest, Stage2InvokeRequest, serialize_document, utc_now
+from models import AGUIRunRequest, A2AInvokeRequest, ApprovalRequest, CollectorIngestRequest, IncidentAssignRequest, IncidentNoteRequest, Stage2InvokeRequest, serialize_document, utc_now
 from otel_runtime import otel_runtime
 from red_team import simulate_attack
 from routes.auth import router as auth_router
@@ -103,10 +103,14 @@ def _persist_incident(website_id: str, state: dict):
         "incident_report": state.get("incident_report"),
         "agent_trace": state.get("agent_trace", []),
         "agent_messages": state.get("agent_messages", []),
+        "agent_discussion": state.get("agent_discussion", []),
         "protocol_trace": state.get("protocol_trace", []),
         "tool_trace": state.get("tool_trace", []),
         "runtime_metadata": state.get("runtime_metadata", {}),
         "llm_usage": state.get("llm_usage", {}),
+        "challenge_review": state.get("challenge_review"),
+        "notes": state.get("notes", []),
+        "assignee": state.get("assignee"),
         "created_at": now,
         "updated_at": now,
     }
@@ -223,6 +227,40 @@ def _telemetry_snapshot(website_id: str):
     }
 
 
+def _create_job(website_id: str, job_type: str, metadata: dict | None = None):
+    job = {
+        "website_id": website_id,
+        "job_type": job_type,
+        "status": "queued",
+        "retry_count": 0,
+        "metadata": metadata or {},
+        "error": None,
+        "created_at": utc_now(),
+        "updated_at": utc_now(),
+    }
+    result = db.jobs.insert_one(job)
+    return str(result.inserted_id)
+
+
+def _update_job(job_id: str, status: str, error: str | None = None, metadata: dict | None = None):
+    try:
+        update_payload = {
+            "status": status,
+            "error": error,
+            "updated_at": utc_now(),
+            **({"metadata": metadata} if metadata is not None else {}),
+        }
+        update_ops = {"$set": update_payload}
+        if status == "failed":
+            update_ops["$inc"] = {"retry_count": 1}
+        db.jobs.update_one(
+            {"_id": ObjectId(job_id)},
+            update_ops,
+        )
+    except Exception:
+        return
+
+
 def _observability_snapshot(website_id: str):
     return otel_runtime.snapshot(website_id)
 
@@ -260,7 +298,7 @@ async def _broadcast_trace(website_id: str, attack_id: str, state: dict):
         await asyncio.sleep(0.3)
 
 
-async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dict):
+async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dict, job_id: str | None = None):
     initial_state = {
         "website": website,
         "simulation": simulation,
@@ -268,6 +306,7 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
         "anomaly": None,
         "correlation": None,
         "classification": None,
+        "challenge_review": None,
         "investigation": None,
         "mitigation_plan": None,
         "policy_decision": None,
@@ -276,8 +315,11 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
         "incident_report": None,
         "agent_trace": [],
         "agent_messages": [],
+        "agent_discussion": [],
         "llm_usage": {},
         "current_stage": "collector_ingested",
+        "notes": [],
+        "assignee": None,
     }
 
     await broadcast(
@@ -292,9 +334,27 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
     )
 
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, mcp_coordinator.run_detection_pipeline, initial_state)
+    if job_id:
+        _update_job(job_id, "running", metadata={"attack_id": attack_id, "phase": "detection"})
+    try:
+        result = await loop.run_in_executor(None, mcp_coordinator.run_detection_pipeline, initial_state)
+    except Exception as exc:
+        if job_id:
+            _update_job(job_id, "failed", error=str(exc), metadata={"attack_id": attack_id, "phase": "detection"})
+        await broadcast(
+            "agent_update",
+            {
+                "attack_id": attack_id,
+                "website_id": website["_id"],
+                "current_stage": "pipeline_failed",
+                "message": f"Detection pipeline failed: {exc}",
+            },
+        )
+        raise
     result["website_id"] = website["_id"]
     result.setdefault("runtime_metadata", {})["stage2"] = get_stage2_runtime_summary()
+    if job_id:
+        result.setdefault("runtime_metadata", {})["job_id"] = job_id
 
     await _broadcast_trace(website["_id"], attack_id, result)
 
@@ -310,6 +370,7 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
             "anomaly": result.get("anomaly"),
             "correlation": result.get("correlation"),
             "classification": result.get("classification"),
+            "challenge_review": result.get("challenge_review"),
             "investigation": result.get("investigation"),
             "mitigation_plan": result.get("mitigation_plan"),
             "policy_decision": result.get("policy_decision"),
@@ -318,6 +379,7 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
             "incident_report": result.get("incident_report"),
             "agent_trace": result.get("agent_trace"),
             "agent_messages": result.get("agent_messages"),
+            "agent_discussion": result.get("agent_discussion"),
             "protocol_trace": result.get("protocol_trace"),
             "tool_trace": result.get("tool_trace"),
             "runtime_metadata": result.get("runtime_metadata", {}),
@@ -349,11 +411,25 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
                 "runtime_metadata": result.get("runtime_metadata", {}),
             },
         )
-        final_state = await loop.run_in_executor(
-            None,
-            mcp_coordinator.run_resolution_pipeline,
-            {**result, "approval_status": "auto_approved"},
-        )
+        try:
+            final_state = await loop.run_in_executor(
+                None,
+                mcp_coordinator.run_resolution_pipeline,
+                {**result, "approval_status": "auto_approved"},
+            )
+        except Exception as exc:
+            if job_id:
+                _update_job(job_id, "failed", error=str(exc), metadata={"attack_id": attack_id, "phase": "auto_resolution"})
+            await broadcast(
+                "agent_update",
+                {
+                    "attack_id": attack_id,
+                    "website_id": website["_id"],
+                    "current_stage": "resolution_failed",
+                    "message": f"Autonomous resolution failed: {exc}",
+                },
+            )
+            raise
         final_state["website_id"] = website["_id"]
         final_state.setdefault("runtime_metadata", {})["stage2"] = get_stage2_runtime_summary()
         active_incidents[attack_id] = final_state
@@ -367,6 +443,8 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
                 "message": "OpenTelemetry recorded the autonomous response path.",
             },
         )
+        if job_id:
+            _update_job(job_id, "completed", metadata={"attack_id": attack_id, "phase": "resolved"})
         await broadcast(
             "incident_resolved",
             {
@@ -379,6 +457,7 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
                 "policy_decision": final_state.get("policy_decision"),
                 "agent_trace": final_state.get("agent_trace"),
                 "agent_messages": final_state.get("agent_messages"),
+                "agent_discussion": final_state.get("agent_discussion"),
                 "protocol_trace": final_state.get("protocol_trace"),
                 "tool_trace": final_state.get("tool_trace"),
                 "runtime_metadata": final_state.get("runtime_metadata", {}),
@@ -400,12 +479,28 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
                 "runtime_metadata": result.get("runtime_metadata", {}),
             },
         )
+        if job_id:
+            _update_job(job_id, "awaiting_approval", metadata={"attack_id": attack_id, "phase": "awaiting_approval"})
     else:
-        final_state = await loop.run_in_executor(
-            None,
-            mcp_coordinator.run_resolution_pipeline,
-            {**result, "approval_status": "manual_required"},
-        )
+        try:
+            final_state = await loop.run_in_executor(
+                None,
+                mcp_coordinator.run_resolution_pipeline,
+                {**result, "approval_status": "manual_required"},
+            )
+        except Exception as exc:
+            if job_id:
+                _update_job(job_id, "failed", error=str(exc), metadata={"attack_id": attack_id, "phase": "manual_escalation"})
+            await broadcast(
+                "agent_update",
+                {
+                    "attack_id": attack_id,
+                    "website_id": website["_id"],
+                    "current_stage": "resolution_failed",
+                    "message": f"Manual escalation path failed: {exc}",
+                },
+            )
+            raise
         final_state["website_id"] = website["_id"]
         final_state.setdefault("runtime_metadata", {})["stage2"] = get_stage2_runtime_summary()
         active_incidents[attack_id] = final_state
@@ -419,6 +514,8 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
                 "message": "OpenTelemetry recorded the escalation and reporting path.",
             },
         )
+        if job_id:
+            _update_job(job_id, "completed", metadata={"attack_id": attack_id, "phase": "manual_escalation"})
         await broadcast(
             "incident_resolved",
             {
@@ -431,6 +528,7 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
                 "policy_decision": final_state.get("policy_decision"),
                 "agent_trace": final_state.get("agent_trace"),
                 "agent_messages": final_state.get("agent_messages"),
+                "agent_discussion": final_state.get("agent_discussion"),
                 "protocol_trace": final_state.get("protocol_trace"),
                 "tool_trace": final_state.get("tool_trace"),
                 "runtime_metadata": final_state.get("runtime_metadata", {}),
@@ -456,7 +554,8 @@ async def _auto_simulation_loop(website: dict):
             "attack_profile": scenario["attack_profile"],
             "source": "demo_collector",
         }
-        await _run_detection_pipeline(website, attack_id, simulation)
+        job_id = _create_job(website["_id"], "auto_simulation_detection", {"attack_id": attack_id})
+        await _run_detection_pipeline(website, attack_id, simulation, job_id)
         for _ in range(15):
             if not attack_running:
                 break
@@ -480,14 +579,18 @@ async def websocket_endpoint(websocket: WebSocket):
                 "anomaly": 1,
                 "correlation": 1,
                 "classification": 1,
+                "challenge_review": 1,
                 "investigation": 1,
                 "mitigation_plan": 1,
                 "policy_decision": 1,
                 "approval_status": 1,
+                "notes": 1,
+                "assignee": 1,
                 "action_result": 1,
                 "incident_report": 1,
                 "agent_trace": 1,
                 "agent_messages": 1,
+                "agent_discussion": 1,
                 "protocol_trace": 1,
                 "tool_trace": 1,
                 "runtime_metadata": 1,
@@ -522,6 +625,7 @@ async def websocket_endpoint(websocket: WebSocket):
 @app.post("/collector/ingest")
 async def ingest_collector_events(payload: CollectorIngestRequest, website=Depends(require_collector)):
     attack_id = payload.attack_id or (uuid.uuid4().hex[:8].upper() if payload.run_detection else None)
+    job_id = _create_job(website["_id"], "collector_ingest", {"attack_id": attack_id, "run_detection": payload.run_detection})
     raw_events = [event.model_dump() for event in payload.events]
     normalized_events = _store_events(website, attack_id, raw_events)
     otel_runtime.record_collector_ingest(website["_id"], payload.source_label, raw_events, payload.run_detection)
@@ -552,11 +656,14 @@ async def ingest_collector_events(payload: CollectorIngestRequest, website=Depen
     )
     if payload.run_detection and attack_id:
         simulation = _build_collector_simulation(website["_id"], attack_id, payload.source_label)
-        await _run_detection_pipeline(website, attack_id, simulation)
+        await _run_detection_pipeline(website, attack_id, simulation, job_id)
+    else:
+        _update_job(job_id, "completed", metadata={"attack_id": attack_id, "phase": "ingested_only"})
     return {
         "status": "accepted",
         "website_id": website["_id"],
         "attack_id": attack_id,
+        "job_id": job_id,
         "events_ingested": len(normalized_events),
         "run_detection": payload.run_detection,
     }
@@ -576,17 +683,50 @@ async def simulate_for_website(website_id: str, user=Depends(require_user)):
         "attack_profile": scenario["attack_profile"],
         "source": "demo_collector",
     }
-    await _run_detection_pipeline(website, attack_id, simulation)
-    return {"status": "pipeline_running", "incident_id": attack_id, "website_id": website_id}
+    job_id = _create_job(website["_id"], "manual_simulation", {"attack_id": attack_id})
+    await _run_detection_pipeline(website, attack_id, simulation, job_id)
+    return {"status": "pipeline_running", "incident_id": attack_id, "website_id": website_id, "job_id": job_id}
 
 
 @app.get("/websites/{website_id}/incidents")
-async def list_incidents_for_website(website_id: str, user=Depends(require_user)):
+async def list_incidents_for_website(
+    website_id: str,
+    q: str | None = Query(default=None),
+    severity: str | None = Query(default=None),
+    attack_class: str | None = Query(default=None),
+    approval_status: str | None = Query(default=None),
+    policy_mode: str | None = Query(default=None),
+    user=Depends(require_user),
+):
     _get_website_or_404(user["_id"], website_id)
+    query = {"website_id": website_id}
+    if severity:
+        query["classification.attack.severity"] = severity.upper()
+    if attack_class:
+        query["classification.predicted_class"] = attack_class
+    if approval_status:
+        query["approval_status"] = approval_status
+    if policy_mode:
+        query["policy_decision.mode"] = policy_mode
     incidents = [
         serialize_document(document)
-        for document in db.incidents.find({"website_id": website_id}).sort("created_at", -1)
+        for document in db.incidents.find(query).sort("created_at", -1)
     ]
+    if q:
+        q_lower = q.lower()
+        incidents = [
+            incident
+            for incident in incidents
+            if q_lower in json.dumps(
+                {
+                    "attack_id": incident.get("attack_id"),
+                    "description": incident.get("simulation", {}).get("description"),
+                    "predicted_class": incident.get("classification", {}).get("predicted_class"),
+                    "source": incident.get("classification", {}).get("attack", {}).get("primary_src_ip"),
+                    "target": incident.get("classification", {}).get("attack", {}).get("target_ip"),
+                }
+            ).lower()
+        ]
     return incidents
 
 
@@ -602,6 +742,44 @@ async def website_observability(website_id: str, user=Depends(require_user)):
     return _observability_snapshot(website_id)
 
 
+@app.get("/websites/{website_id}/analytics")
+async def website_analytics(website_id: str, user=Depends(require_user)):
+    _get_website_or_404(user["_id"], website_id)
+    incidents = [
+        serialize_document(document)
+        for document in db.incidents.find({"website_id": website_id}).sort("created_at", -1).limit(200)
+    ]
+    by_class = {}
+    by_severity = {}
+    by_status = {}
+    for incident in incidents:
+        attack_class = incident.get("classification", {}).get("predicted_class", "Unknown")
+        sev = incident.get("classification", {}).get("attack", {}).get("severity", "UNKNOWN")
+        status = incident.get("approval_status") or incident.get("current_stage") or "unknown"
+        by_class[attack_class] = by_class.get(attack_class, 0) + 1
+        by_severity[sev] = by_severity.get(sev, 0) + 1
+        by_status[status] = by_status.get(status, 0) + 1
+    return {
+        "website_id": website_id,
+        "totals": {
+            "incidents": len(incidents),
+            "notes": sum(len(incident.get("notes") or []) for incident in incidents),
+        },
+        "by_class": by_class,
+        "by_severity": by_severity,
+        "by_status": by_status,
+    }
+
+
+@app.get("/websites/{website_id}/jobs")
+async def website_jobs(website_id: str, user=Depends(require_user)):
+    _get_website_or_404(user["_id"], website_id)
+    return [
+        serialize_document(document)
+        for document in db.jobs.find({"website_id": website_id}).sort("created_at", -1).limit(100)
+    ]
+
+
 @app.get("/incidents/{incident_id}")
 async def get_incident(incident_id: str, user=Depends(require_user)):
     incident = db.incidents.find_one({"attack_id": incident_id})
@@ -611,6 +789,52 @@ async def get_incident(incident_id: str, user=Depends(require_user)):
     if not website:
         raise HTTPException(status_code=404, detail="Incident not found")
     return serialize_document(incident)
+
+
+@app.get("/incidents/{incident_id}/notes")
+async def get_incident_notes(incident_id: str, user=Depends(require_user)):
+    incident = db.incidents.find_one({"attack_id": incident_id})
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    website = db.websites.find_one(_website_query(user["_id"], incident["website_id"]))
+    if not website:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    return serialize_document(incident).get("notes", [])
+
+
+@app.post("/incidents/{incident_id}/notes")
+async def add_incident_note(incident_id: str, body: IncidentNoteRequest, user=Depends(require_user)):
+    incident = db.incidents.find_one({"attack_id": incident_id})
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    website = db.websites.find_one(_website_query(user["_id"], incident["website_id"]))
+    if not website:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    note = {
+        "author": user.get("name") or user.get("email"),
+        "author_role": user.get("role", "owner"),
+        "note": body.note.strip(),
+        "created_at": utc_now(),
+    }
+    db.incidents.update_one({"attack_id": incident_id}, {"$push": {"notes": note}, "$set": {"updated_at": utc_now()}})
+    return serialize_document(db.incidents.find_one({"attack_id": incident_id})).get("notes", [])
+
+
+@app.post("/incidents/{incident_id}/assign")
+async def assign_incident(incident_id: str, body: IncidentAssignRequest, user=Depends(require_user)):
+    incident = db.incidents.find_one({"attack_id": incident_id})
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    website = db.websites.find_one(_website_query(user["_id"], incident["website_id"]))
+    if not website:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    assignee = {
+        "name": body.assignee.strip(),
+        "assigned_by": user.get("name") or user.get("email"),
+        "assigned_at": utc_now(),
+    }
+    db.incidents.update_one({"attack_id": incident_id}, {"$set": {"assignee": assignee, "updated_at": utc_now()}})
+    return serialize_document(db.incidents.find_one({"attack_id": incident_id}))
 
 
 @app.get("/stage2/runtime")
@@ -788,6 +1012,7 @@ async def approve_incident(incident_id: str, body: ApprovalRequest, user=Depends
         raise HTTPException(status_code=404, detail="Incident not found")
     if body.decision not in {"approved", "rejected"}:
         raise HTTPException(status_code=400, detail="Decision must be approved or rejected")
+    job_id = _create_job(incident["website_id"], "incident_resolution", {"attack_id": incident_id, "decision": body.decision})
 
     state = {
         "website": serialize_document(website),
@@ -796,6 +1021,7 @@ async def approve_incident(incident_id: str, body: ApprovalRequest, user=Depends
         "anomaly": incident.get("anomaly"),
         "correlation": incident.get("correlation"),
         "classification": incident.get("classification"),
+        "challenge_review": incident.get("challenge_review"),
         "investigation": incident.get("investigation"),
         "mitigation_plan": incident.get("mitigation_plan"),
         "policy_decision": incident.get("policy_decision"),
@@ -804,13 +1030,18 @@ async def approve_incident(incident_id: str, body: ApprovalRequest, user=Depends
         "incident_report": incident.get("incident_report"),
         "agent_trace": incident.get("agent_trace", []),
         "agent_messages": incident.get("agent_messages", []),
+        "agent_discussion": incident.get("agent_discussion", []),
         "protocol_trace": incident.get("protocol_trace", []),
         "tool_trace": incident.get("tool_trace", []),
         "runtime_metadata": incident.get("runtime_metadata", {}),
         "llm_usage": incident.get("llm_usage", {}),
         "current_stage": incident.get("current_stage"),
+        "notes": incident.get("notes", []),
+        "assignee": incident.get("assignee"),
     }
+    state.setdefault("runtime_metadata", {})["job_id"] = job_id
     active_incidents[incident_id] = state
+    _update_job(job_id, "running", metadata={"attack_id": incident_id, "phase": "resolution"})
 
     await broadcast(
         "agent_update",
@@ -823,6 +1054,7 @@ async def approve_incident(incident_id: str, body: ApprovalRequest, user=Depends
             "policy_decision": state.get("policy_decision"),
             "agent_trace": state.get("agent_trace"),
             "agent_messages": state.get("agent_messages"),
+            "agent_discussion": state.get("agent_discussion"),
             "protocol_trace": state.get("protocol_trace"),
             "tool_trace": state.get("tool_trace"),
             "runtime_metadata": state.get("runtime_metadata", {}),
@@ -830,7 +1062,21 @@ async def approve_incident(incident_id: str, body: ApprovalRequest, user=Depends
     )
 
     loop = asyncio.get_event_loop()
-    final_state = await loop.run_in_executor(None, mcp_coordinator.run_resolution_pipeline, state)
+    try:
+        final_state = await loop.run_in_executor(None, mcp_coordinator.run_resolution_pipeline, state)
+    except Exception as exc:
+        _update_job(job_id, "failed", error=str(exc), metadata={"attack_id": incident_id, "phase": "resolution"})
+        await broadcast(
+            "agent_update",
+            {
+                "attack_id": incident_id,
+                "website_id": incident["website_id"],
+                "approval_status": body.decision,
+                "current_stage": "resolution_failed",
+                "message": f"Resolution pipeline failed after analyst decision: {exc}",
+            },
+        )
+        raise
     final_state["website_id"] = incident["website_id"]
     final_state.setdefault("runtime_metadata", {})["stage2"] = get_stage2_runtime_summary()
     active_incidents[incident_id] = final_state
@@ -845,14 +1091,18 @@ async def approve_incident(incident_id: str, body: ApprovalRequest, user=Depends
             "anomaly": final_state.get("anomaly"),
             "correlation": final_state.get("correlation"),
             "classification": final_state.get("classification"),
+            "challenge_review": final_state.get("challenge_review"),
             "investigation": final_state.get("investigation"),
             "mitigation_plan": final_state.get("mitigation_plan"),
             "policy_decision": final_state.get("policy_decision"),
             "approval_status": final_state.get("approval_status"),
+            "notes": final_state.get("notes"),
+            "assignee": final_state.get("assignee"),
             "action_result": final_state.get("action_result"),
             "incident_report": final_state.get("incident_report"),
             "agent_trace": final_state.get("agent_trace"),
             "agent_messages": final_state.get("agent_messages"),
+            "agent_discussion": final_state.get("agent_discussion"),
             "protocol_trace": final_state.get("protocol_trace"),
             "tool_trace": final_state.get("tool_trace"),
             "runtime_metadata": final_state.get("runtime_metadata", {}),
@@ -870,6 +1120,7 @@ async def approve_incident(incident_id: str, body: ApprovalRequest, user=Depends
             "message": f"Approval flow completed with decision: {body.decision}.",
         },
     )
+    _update_job(job_id, "completed", metadata={"attack_id": incident_id, "phase": "resolved"})
 
     await broadcast(
         "incident_resolved",
@@ -883,6 +1134,7 @@ async def approve_incident(incident_id: str, body: ApprovalRequest, user=Depends
             "policy_decision": final_state.get("policy_decision"),
             "agent_trace": final_state.get("agent_trace"),
             "agent_messages": final_state.get("agent_messages"),
+            "agent_discussion": final_state.get("agent_discussion"),
             "protocol_trace": final_state.get("protocol_trace"),
             "tool_trace": final_state.get("tool_trace"),
             "runtime_metadata": final_state.get("runtime_metadata", {}),

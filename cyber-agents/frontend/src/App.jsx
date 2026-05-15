@@ -162,6 +162,8 @@ function App() {
     recent_alerts: [],
     latest_tool: {},
   });
+  const [analytics, setAnalytics] = useState({ totals: {}, by_class: {}, by_severity: {}, by_status: {} });
+  const [jobs, setJobs] = useState([]);
   const [integration, setIntegration] = useState(null);
   const [connected, setConnected] = useState(false);
   const [autoRunning, setAutoRunning] = useState(false);
@@ -179,6 +181,14 @@ function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [severityFilter, setSeverityFilter] = useState("all");
+  const [approvalFilter, setApprovalFilter] = useState("all");
+  const [noteDraft, setNoteDraft] = useState("");
+  const [notesSaving, setNotesSaving] = useState(false);
+  const [assigneeDraft, setAssigneeDraft] = useState("");
+  const [assigning, setAssigning] = useState(false);
+  const [incidentView, setIncidentView] = useState("discussion");
 
   useEffect(() => {
     if (!token) {
@@ -186,6 +196,8 @@ function App() {
       setWebsites([]);
       setSelectedWebsiteId("");
       setTelemetry({ total_events: 0, counts: {}, recent_events: [] });
+      setAnalytics({ totals: {}, by_class: {}, by_severity: {}, by_status: {} });
+      setJobs([]);
       setObservability({
         enabled: false,
         metrics: { event_type_counts: {}, failed_auth_events: 0, tool_executions: 0, incidents_detected: 0 },
@@ -223,6 +235,34 @@ function App() {
       cancelled = true;
     };
   }, [token]);
+
+  async function loadSelectedWebsiteData(websiteId, activeToken) {
+    if (!websiteId || !activeToken) {
+      return null;
+    }
+    const [websiteIncidents, telemetryData, observabilityData, integrationData, analyticsData, jobsData] = await Promise.all([
+      apiFetch(`/websites/${websiteId}/incidents`, {}, activeToken),
+      apiFetch(`/websites/${websiteId}/telemetry`, {}, activeToken),
+      apiFetch(`/websites/${websiteId}/observability`, {}, activeToken),
+      apiFetch(`/websites/${websiteId}/integration`, {}, activeToken),
+      apiFetch(`/websites/${websiteId}/analytics`, {}, activeToken),
+      apiFetch(`/websites/${websiteId}/jobs`, {}, activeToken),
+    ]);
+    setIncidents((current) => {
+      const next = { ...current };
+      websiteIncidents.forEach((incident) => {
+        next[incident.attack_id] = incident;
+      });
+      return next;
+    });
+    setTelemetry(telemetryData);
+    setObservability(observabilityData);
+    setIntegration(integrationData);
+    setAnalytics(analyticsData);
+    setJobs(jobsData);
+    setSelectedIncidentId((current) => current || websiteIncidents[0]?.attack_id || "");
+    return { websiteIncidents, telemetryData, observabilityData, integrationData, analyticsData, jobsData };
+  }
 
   useEffect(() => {
     let socket;
@@ -274,14 +314,18 @@ function App() {
                 anomaly: payload.data.anomaly || existing.anomaly,
                 correlation: payload.data.correlation || existing.correlation,
                 classification: payload.data.classification || existing.classification,
+                challenge_review: payload.data.challenge_review || existing.challenge_review,
                 investigation: payload.data.investigation || existing.investigation,
                 mitigation_plan: payload.data.mitigation_plan || existing.mitigation_plan,
                 policy_decision: payload.data.policy_decision || existing.policy_decision,
                 approval_status: payload.data.approval_status || existing.approval_status,
+                assignee: payload.data.assignee || existing.assignee,
+                notes: payload.data.notes || existing.notes,
                 action_result: payload.data.action_result || existing.action_result,
                 incident_report: payload.data.incident_report || existing.incident_report,
                 agent_trace: payload.data.agent_trace || existing.agent_trace,
                 agent_messages: payload.data.agent_messages || existing.agent_messages,
+                agent_discussion: payload.data.agent_discussion || existing.agent_discussion,
                 protocol_trace: payload.data.protocol_trace || existing.protocol_trace,
                 tool_trace: payload.data.tool_trace || existing.tool_trace,
                 runtime_metadata: payload.data.runtime_metadata || existing.runtime_metadata,
@@ -321,26 +365,13 @@ function App() {
 
     async function loadWebsiteData() {
       try {
-        const [websiteIncidents, telemetryData, observabilityData, integrationData] = await Promise.all([
-          apiFetch(`/websites/${selectedWebsiteId}/incidents`, {}, token),
-          apiFetch(`/websites/${selectedWebsiteId}/telemetry`, {}, token),
-          apiFetch(`/websites/${selectedWebsiteId}/observability`, {}, token),
-          apiFetch(`/websites/${selectedWebsiteId}/integration`, {}, token),
-        ]);
+        const result = await loadSelectedWebsiteData(selectedWebsiteId, token);
         if (cancelled) {
           return;
         }
-        setIncidents((current) => {
-          const next = { ...current };
-          websiteIncidents.forEach((incident) => {
-            next[incident.attack_id] = incident;
-          });
-          return next;
-        });
-        setTelemetry(telemetryData);
-        setObservability(observabilityData);
-        setIntegration(integrationData);
-        setSelectedIncidentId((current) => current || websiteIncidents[0]?.attack_id || "");
+        if (!result) {
+          return;
+        }
       } catch (err) {
         setError(err.message);
       }
@@ -371,11 +402,30 @@ function App() {
     () =>
       Object.values(incidents)
         .filter((incident) => incident.website_id === selectedWebsiteId)
+        .filter((incident) => severityFilter === "all" || incident.classification?.attack?.severity === severityFilter)
+        .filter((incident) => approvalFilter === "all" || incident.approval_status === approvalFilter)
+        .filter((incident) => {
+          if (!searchTerm.trim()) {
+            return true;
+          }
+          const haystack = JSON.stringify({
+            attackId: incident.attack_id,
+            attackClass: incident.classification?.predicted_class,
+            source: incident.classification?.attack?.primary_src_ip,
+            target: incident.classification?.attack?.target_ip,
+            description: incident.simulation?.description,
+          }).toLowerCase();
+          return haystack.includes(searchTerm.trim().toLowerCase());
+        })
         .sort((a, b) => (b.simulation?.timestamp || "").localeCompare(a.simulation?.timestamp || "")),
-    [incidents, selectedWebsiteId]
+    [incidents, selectedWebsiteId, severityFilter, approvalFilter, searchTerm]
   );
   const selectedIncident =
     websiteIncidents.find((incident) => incident.attack_id === selectedIncidentId) || websiteIncidents[0] || null;
+
+  useEffect(() => {
+    setAssigneeDraft(selectedIncident?.assignee?.name || "");
+  }, [selectedIncident?.attack_id, selectedIncident?.assignee?.name]);
 
   const visibleAgentTrace = useMemo(() => {
     if (!selectedIncident) {
@@ -421,6 +471,40 @@ function App() {
     });
   }, [selectedIncident]);
 
+  const visibleDiscussion = useMemo(() => {
+    if (!selectedIncident) {
+      return [];
+    }
+    if ((selectedIncident.agent_discussion || []).length) {
+      return selectedIncident.agent_discussion;
+    }
+    const discussion = [];
+    (selectedIncident.agent_trace || []).forEach((entry) => {
+      discussion.push({
+        speaker: entry.agent,
+        audience: null,
+        message: entry.summary,
+        stage: entry.stage,
+        kind: "statement",
+      });
+    });
+    if (!discussion.length) {
+      (selectedIncident.tool_trace || []).forEach((entry, index, items) => {
+        const next = items[index + 1];
+        discussion.push({
+          speaker: entry.llm_agent || entry.agent,
+          audience: next ? next.llm_agent || next.agent : "SOC Dashboard",
+          message: entry.llm_used
+            ? `I completed ${entry.tool} using Gemini-backed reasoning. Please take the updated state and continue the investigation.`
+            : `I completed ${entry.tool} using deterministic logic. Please continue with the updated incident state.`,
+          stage: entry.output_summary?.current_stage || entry.tool,
+          kind: "handoff",
+        });
+      });
+    }
+    return discussion;
+  }, [selectedIncident]);
+
   const stats = useMemo(
     () => ({
       incidents: websiteIncidents.length,
@@ -430,6 +514,16 @@ function App() {
     }),
     [websiteIncidents]
   );
+
+  const topAttackClasses = useMemo(
+    () =>
+      Object.entries(analytics.by_class || {})
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 4),
+    [analytics]
+  );
+
+  const recentJobs = useMemo(() => (jobs || []).slice(0, 5), [jobs]);
 
   const notificationItems = useMemo(() => {
     const items = [];
@@ -502,8 +596,7 @@ function App() {
     try {
       setError("");
       await apiFetch(`/websites/${selectedWebsiteId}/simulate`, { method: "POST" }, token);
-      const telemetryData = await apiFetch(`/websites/${selectedWebsiteId}/telemetry`, {}, token);
-      setTelemetry(telemetryData);
+      await loadSelectedWebsiteData(selectedWebsiteId, token);
     } catch (err) {
       setError(err.message);
     }
@@ -517,6 +610,7 @@ function App() {
       const endpoint = autoRunning ? `/websites/${selectedWebsiteId}/monitor/stop` : `/websites/${selectedWebsiteId}/monitor/start`;
       const data = await apiFetch(endpoint, { method: "POST" }, token);
       setAutoRunning(Boolean(data.running));
+      await loadSelectedWebsiteData(selectedWebsiteId, token);
     } catch (err) {
       setError(err.message);
     }
@@ -534,10 +628,58 @@ function App() {
         token
       );
       setIncidents((current) => ({ ...current, [updated.simulation.attack_id]: updated }));
+      await loadSelectedWebsiteData(selectedWebsiteId, token);
     } catch (err) {
       setError(err.message);
     } finally {
       setDecisionLoading((current) => ({ ...current, [selectedIncident.attack_id]: false }));
+    }
+  }
+
+  async function addIncidentNote() {
+    if (!selectedIncident || !noteDraft.trim()) {
+      return;
+    }
+    try {
+      setNotesSaving(true);
+      const notes = await apiFetch(
+        `/incidents/${selectedIncident.attack_id}/notes`,
+        { method: "POST", body: JSON.stringify({ note: noteDraft.trim() }) },
+        token
+      );
+      setIncidents((current) => ({
+        ...current,
+        [selectedIncident.attack_id]: {
+          ...(current[selectedIncident.attack_id] || {}),
+          notes,
+        },
+      }));
+      await loadSelectedWebsiteData(selectedWebsiteId, token);
+      setNoteDraft("");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setNotesSaving(false);
+    }
+  }
+
+  async function assignIncident() {
+    if (!selectedIncident || !assigneeDraft.trim()) {
+      return;
+    }
+    try {
+      setAssigning(true);
+      const updated = await apiFetch(
+        `/incidents/${selectedIncident.attack_id}/assign`,
+        { method: "POST", body: JSON.stringify({ assignee: assigneeDraft.trim() }) },
+        token
+      );
+      setIncidents((current) => ({ ...current, [selectedIncident.attack_id]: updated }));
+      await loadSelectedWebsiteData(selectedWebsiteId, token);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setAssigning(false);
     }
   }
 
@@ -565,6 +707,8 @@ function App() {
     setSelectedIncidentId("");
     setIncidents({});
     setFeed([]);
+    setAnalytics({ totals: {}, by_class: {}, by_severity: {}, by_status: {} });
+    setJobs([]);
     setObservability({
       enabled: false,
       metrics: { event_type_counts: {}, failed_auth_events: 0, tool_executions: 0, incidents_detected: 0 },
@@ -781,7 +925,7 @@ function App() {
             </button>
             <div className="topbar-search">
               <Search size={18} color="var(--text-subtle)" />
-              <input type="text" placeholder="Search incidents, IPs, policies..." />
+              <input type="text" placeholder="Search incidents, IPs, policies..." value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} />
             </div>
           </div>
           <div className="flex-gap" style={{position: 'relative'}}>
@@ -832,6 +976,9 @@ function App() {
                   <div style={{padding: "0 14px 14px"}}>
                     <div style={{fontWeight: 700, color: colors.text}}>{user?.name || "Analyst"}</div>
                     <div style={{fontSize: 12, color: colors.muted, marginTop: 4}}>{user?.email || ""}</div>
+                    <div style={{fontSize: 12, color: colors.subtle, marginTop: 8, textTransform: "capitalize"}}>
+                      Role: {user?.role || "owner"}
+                    </div>
                   </div>
                   <button style={menuActionButtonStyle} onClick={logout}>
                     Log out
@@ -893,6 +1040,63 @@ function App() {
                       </div>
                       <div className="card-value">{stats.approvals}</div>
                       <div style={{color: 'var(--text-subtle)', fontSize: 13}}>Queued for decision</div>
+                    </div>
+                  </div>
+
+                  <div className="grid-layout" style={{marginTop: 24}}>
+                    <div className="card">
+                      <div className="card-title" style={{marginBottom: 16}}>Incident Analytics</div>
+                      <div className="grid-metrics" style={{gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12, marginBottom: 16}}>
+                        <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                          <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>TOTAL INCIDENTS</div>
+                          <div style={{fontWeight: 700, fontSize: 18}}>{analytics.totals?.incidents || 0}</div>
+                        </div>
+                        <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                          <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>ANALYST NOTES</div>
+                          <div style={{fontWeight: 700, fontSize: 18}}>{analytics.totals?.notes || 0}</div>
+                        </div>
+                        <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                          <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>CRITICAL CASES</div>
+                          <div style={{fontWeight: 700, fontSize: 18}}>{analytics.by_severity?.CRITICAL || 0}</div>
+                        </div>
+                      </div>
+                      <div style={{display: 'grid', gap: 12}}>
+                        {topAttackClasses.length ? topAttackClasses.map(([label, count]) => (
+                          <div key={label} className="flex-between" style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <span style={{fontWeight: 600, fontSize: 13}}>{label}</span>
+                            <span style={{fontSize: 13, color: 'var(--text-muted)'}}>{count} cases</span>
+                          </div>
+                        )) : (
+                          <div style={{color: 'var(--text-muted)', fontSize: 13}}>Attack-class analytics will appear once incidents accumulate.</div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="card">
+                      <div className="card-title" style={{marginBottom: 16}}>Pipeline Jobs</div>
+                      <div style={{display: 'grid', gap: 12}}>
+                        {recentJobs.length ? recentJobs.map((job) => (
+                          <div key={job._id} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div className="flex-between" style={{marginBottom: 6}}>
+                              <span style={{fontWeight: 600, fontSize: 13}}>{job.job_type.replace(/_/g, ' ')}</span>
+                              <span className={`status-pill ${job.status === 'completed' ? 'badge-green' : job.status === 'failed' ? 'badge-red' : job.status === 'awaiting_approval' ? 'badge-blue' : 'badge-amber'}`}>
+                                {job.status.replace(/_/g, ' ')}
+                              </span>
+                            </div>
+                            <div style={{fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6}}>
+                              Attack: {job.metadata?.attack_id || 'n/a'} • Phase: {job.metadata?.phase || 'queued'}
+                            </div>
+                            <div style={{fontSize: 12, color: 'var(--text-subtle)', marginTop: 6}}>
+                              Retries: {job.retry_count || 0} • Updated: {job.updated_at ? new Date(job.updated_at).toLocaleTimeString() : 'n/a'}
+                            </div>
+                            {job.error ? (
+                              <div style={{fontSize: 12, color: colors.red, marginTop: 6}}>{job.error}</div>
+                            ) : null}
+                          </div>
+                        )) : (
+                          <div style={{color: 'var(--text-muted)', fontSize: 13}}>Jobs will appear as collector ingests and incident workflows run.</div>
+                        )}
+                      </div>
                     </div>
                   </div>
 
@@ -1082,6 +1286,23 @@ function App() {
                 <div className="grid-layout">
                   <div className="card" style={{padding: '16px 0'}}>
                     <div className="card-title" style={{padding: '0 16px', marginBottom: 12}}>Incident Queue</div>
+                    <div style={{display: 'flex', gap: 8, padding: '0 16px 12px', flexWrap: 'wrap'}}>
+                      <select value={severityFilter} onChange={(event) => setSeverityFilter(event.target.value)} style={{...inputStyle, width: 160, marginBottom: 0}}>
+                        <option value="all">All severities</option>
+                        <option value="CRITICAL">Critical</option>
+                        <option value="HIGH">High</option>
+                        <option value="MEDIUM">Medium</option>
+                        <option value="LOW">Low</option>
+                      </select>
+                      <select value={approvalFilter} onChange={(event) => setApprovalFilter(event.target.value)} style={{...inputStyle, width: 180, marginBottom: 0}}>
+                        <option value="all">All statuses</option>
+                        <option value="pending">Pending approval</option>
+                        <option value="approved">Approved</option>
+                        <option value="rejected">Rejected</option>
+                        <option value="auto_approved">Auto approved</option>
+                        <option value="manual_required">Manual required</option>
+                      </select>
+                    </div>
                     <div style={{display: 'flex', flexDirection: 'column'}}>
                       {websiteIncidents.length ? websiteIncidents.map(incident => {
                         const severity = incident.classification?.attack?.severity || "LOW";
@@ -1138,6 +1359,38 @@ function App() {
                             <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>CLASSIFIER RUNTIME</div>
                             <div style={{fontWeight: 600, fontSize: 13}}>{selectedIncident.runtime_metadata?.active_runtime || selectedIncident.llm_usage?.["Threat Classification Agent"]?.runtime || '—'}</div>
                           </div>
+                          <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>CONFIDENCE SOURCE</div>
+                            <div style={{fontWeight: 600, fontSize: 13}}>{selectedIncident.classification?.confidence_source || '—'}</div>
+                          </div>
+                          <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>MODEL VERSION</div>
+                            <div style={{fontWeight: 600, fontSize: 13}}>{selectedIncident.classification?.model_prediction?.model_version || '—'}</div>
+                          </div>
+                          <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>ASSIGNEE</div>
+                            <div style={{fontWeight: 600, fontSize: 13}}>{selectedIncident.assignee?.name || 'Unassigned'}</div>
+                          </div>
+                        </div>
+
+                        <div style={{padding: 16, background: 'var(--bg-canvas)', border: '1px solid var(--border-color)', borderRadius: 12, marginBottom: 24}}>
+                          <div className="card-title" style={{marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>Ownership</div>
+                          <div className="flex-gap" style={{alignItems: 'stretch', flexWrap: 'wrap'}}>
+                            <input
+                              value={assigneeDraft}
+                              onChange={(event) => setAssigneeDraft(event.target.value)}
+                              placeholder="Assign analyst or incident owner"
+                              style={{...inputStyle, flex: '1 1 240px', marginBottom: 0}}
+                            />
+                            <button className="btn btn-secondary" onClick={assignIncident} disabled={assigning || !assigneeDraft.trim()}>
+                              {assigning ? 'Assigning...' : 'Assign owner'}
+                            </button>
+                          </div>
+                          {selectedIncident.assignee?.assigned_by ? (
+                            <div style={{fontSize: 12, color: 'var(--text-subtle)', marginTop: 8}}>
+                              Assigned by {selectedIncident.assignee.assigned_by} at {new Date(selectedIncident.assignee.assigned_at).toLocaleString()}
+                            </div>
+                          ) : null}
                         </div>
 
                         {selectedIncident.approval_status === "pending" && (
@@ -1150,105 +1403,211 @@ function App() {
                           </div>
                         )}
 
-                        <div className="card-title" style={{marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>AGENT TRACE</div>
-                        <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
-                          {visibleAgentTrace.map((entry, idx) => (
-                            <div key={idx} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
-                              <div className="flex-between" style={{marginBottom: 6}}>
-                                <span style={{fontWeight: 600, fontSize: 13}}>{entry.agent}</span>
-                                <span style={{fontSize: 12, color: 'var(--text-subtle)'}}>{entry.stage}</span>
+                        {selectedIncident.challenge_review ? (
+                          <div style={{padding: 16, background: 'var(--bg-canvas)', border: '1px solid var(--border-color)', borderRadius: 12, marginBottom: 24}}>
+                            <div className="card-title" style={{marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>Challenge Review</div>
+                            <div className="grid-metrics" style={{gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12, marginBottom: 12}}>
+                              <div style={{background: 'rgba(255,255,255,0.03)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                                <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>OUTCOME</div>
+                                <div style={{fontWeight: 700, fontSize: 15, textTransform: 'capitalize'}}>{selectedIncident.challenge_review.challenge_outcome || 'support'}</div>
                               </div>
-                              <div style={{fontSize: 13, color: 'var(--text-muted)'}}>{entry.summary}</div>
-                              {entry.details?.tool || entry.details?.llm_runtime ? (
-                                <div style={{fontSize: 12, color: 'var(--text-subtle)', marginTop: 6}}>
-                                  {entry.details?.tool ? `Tool: ${entry.details.tool}` : ""}
-                                  {entry.details?.tool && entry.details?.llm_runtime ? " • " : ""}
-                                  {entry.details?.llm_runtime ? `Runtime: ${entry.details.llm_runtime}` : ""}
+                              <div style={{background: 'rgba(255,255,255,0.03)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                                <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>ALT CLASS</div>
+                                <div style={{fontWeight: 700, fontSize: 15}}>{selectedIncident.challenge_review.alternative_class || '—'}</div>
+                              </div>
+                              <div style={{background: 'rgba(255,255,255,0.03)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                                <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>FALSE POSITIVE RISK</div>
+                                <div style={{fontWeight: 700, fontSize: 15}}>{selectedIncident.challenge_review.false_positive_risk || '—'}</div>
+                              </div>
+                            </div>
+                            <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.7}}>
+                              Confidence in primary verdict: {selectedIncident.challenge_review.confidence_in_primary ? `${Math.round(selectedIncident.challenge_review.confidence_in_primary * 100)}%` : 'n/a'}
+                            </div>
+                            {(selectedIncident.challenge_review.notes || []).length ? (
+                              <div style={{marginTop: 10, display: 'grid', gap: 8}}>
+                                {(selectedIncident.challenge_review.notes || []).map((note, idx) => (
+                                  <div key={idx} style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6}}>
+                                    • {note}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
+
+                        <div className="flex-gap" style={{marginBottom: 16, flexWrap: 'wrap'}}>
+                          <button className={`btn ${incidentView === 'discussion' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setIncidentView('discussion')}>
+                            Agent Discussion
+                          </button>
+                          <button className={`btn ${incidentView === 'analysis' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setIncidentView('analysis')}>
+                            Analysis Trace
+                          </button>
+                        </div>
+
+                        {incidentView === 'discussion' ? (
+                          <>
+                            <div className="card-title" style={{marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>AGENT DISCUSSION</div>
+                            <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
+                              {visibleDiscussion.map((entry, idx) => (
+                                <div key={idx} style={{padding: 14, background: idx % 2 === 0 ? 'rgba(139, 92, 246, 0.08)' : 'var(--bg-canvas)', borderRadius: 14, border: '1px solid var(--border-color)'}}>
+                                  <div className="flex-between" style={{marginBottom: 8, gap: 12}}>
+                                    <span style={{fontWeight: 700, fontSize: 13}}>
+                                      {entry.speaker}
+                                      {entry.audience ? (
+                                        <span style={{fontWeight: 500, color: 'var(--text-subtle)', marginLeft: 8}}>→ {entry.audience}</span>
+                                      ) : null}
+                                    </span>
+                                    <span style={{fontSize: 12, color: 'var(--text-subtle)', textTransform: 'capitalize'}}>{(entry.stage || entry.kind || 'discussion').replace(/_/g, ' ')}</span>
+                                  </div>
+                                  <div style={{fontSize: 14, color: 'var(--text-muted)', lineHeight: 1.7}}>
+                                    {entry.message}
+                                  </div>
+                                </div>
+                              ))}
+                              {!visibleDiscussion.length ? (
+                                <div style={{fontSize: 13, color: 'var(--text-muted)'}}>
+                                  The agent conversation will appear here once the incident workflow begins.
                                 </div>
                               ) : null}
                             </div>
-                          ))}
-                          {!visibleAgentTrace.length ? (
-                            <div style={{fontSize: 13, color: 'var(--text-muted)'}}>
-                              Agent trace will appear here once the multi-agent coordinator publishes the incident workflow.
-                            </div>
-                          ) : null}
-                        </div>
-
-                        {visibleAgentMessages.length ? (
+                          </>
+                        ) : (
                           <>
-                            <div className="card-title" style={{marginTop: 24, marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>AGENT HANDOFFS</div>
+                            <div className="card-title" style={{marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>AGENT TRACE</div>
                             <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
-                              {visibleAgentMessages.map((entry, idx) => (
+                              {visibleAgentTrace.map((entry, idx) => (
                                 <div key={idx} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
                                   <div className="flex-between" style={{marginBottom: 6}}>
-                                    <span style={{fontWeight: 600, fontSize: 13}}>{entry.from} → {entry.to}</span>
-                                    <span style={{fontSize: 12, color: 'var(--text-subtle)'}}>{entry.subject}</span>
-                                  </div>
-                                  <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6}}>{entry.content}</div>
-                                  {entry.artifacts?.tool || entry.artifacts?.current_stage ? (
-                                    <div style={{fontSize: 12, color: 'var(--text-subtle)', marginTop: 6}}>
-                                      {entry.artifacts?.tool ? `Tool: ${entry.artifacts.tool}` : ""}
-                                      {entry.artifacts?.tool && entry.artifacts?.current_stage ? " • " : ""}
-                                      {entry.artifacts?.current_stage ? `Stage: ${entry.artifacts.current_stage}` : ""}
-                                    </div>
-                                  ) : null}
-                                </div>
-                              ))}
-                            </div>
-                          </>
-                        ) : null}
-
-                        {(selectedIncident.protocol_trace || []).length ? (
-                          <>
-                            <div className="card-title" style={{marginTop: 24, marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>A2A INVOCATION TRACE</div>
-                            <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
-                              {(selectedIncident.protocol_trace || []).map((entry, idx) => (
-                                <div key={idx} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
-                                  <div className="flex-between" style={{marginBottom: 8}}>
-                                    <span style={{fontWeight: 600, fontSize: 13}}>{entry.from_agent} → {entry.to_agent}</span>
-                                    <span style={{fontSize: 12, color: 'var(--text-subtle)'}}>{entry.protocol}</span>
-                                  </div>
-                                  <div style={{fontSize: 13, color: 'var(--text-muted)', marginBottom: 8}}>
-                                    Runtime: {entry.runtime} • Task ID: {entry.task_id}
-                                  </div>
-                                  <div style={{fontSize: 12, color: 'var(--text-subtle)', lineHeight: 1.6}}>
-                                    Stage: {entry.output_summary?.current_stage || "n/a"} • Approval: {entry.output_summary?.approval_status || "n/a"}
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          </>
-                        ) : null}
-
-                        {(selectedIncident.tool_trace || []).length ? (
-                          <>
-                            <div className="card-title" style={{marginTop: 24, marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>MCP TOOL TRACE</div>
-                            <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
-                              {(selectedIncident.tool_trace || []).map((entry, idx) => (
-                                <div key={idx} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
-                                  <div className="flex-between" style={{marginBottom: 8}}>
                                     <span style={{fontWeight: 600, fontSize: 13}}>{entry.agent}</span>
-                                    <span style={{fontSize: 12, color: 'var(--text-subtle)'}}>{entry.tool}</span>
+                                    <span style={{fontSize: 12, color: 'var(--text-subtle)'}}>{entry.stage}</span>
                                   </div>
-                                  <div style={{fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6}}>
-                                    Output stage: {entry.output_summary?.current_stage || 'n/a'} • Approval: {entry.output_summary?.approval_status || 'n/a'}
-                                  </div>
-                                  {entry.llm_agent ? (
+                                  <div style={{fontSize: 13, color: 'var(--text-muted)'}}>{entry.summary}</div>
+                                  {entry.details?.tool || entry.details?.llm_runtime ? (
                                     <div style={{fontSize: 12, color: 'var(--text-subtle)', marginTop: 6}}>
-                                      {entry.llm_agent} {entry.llm_used ? `used ${entry.llm_runtime || 'Gemini'}` : 'fell back to heuristic logic'}.
-                                    </div>
-                                  ) : null}
-                                  {entry.prompt_profile?.purpose ? (
-                                    <div style={{fontSize: 12, color: 'var(--text-subtle)', marginTop: 6}}>
-                                      Purpose: {entry.prompt_profile.purpose}
+                                      {entry.details?.tool ? `Tool: ${entry.details.tool}` : ""}
+                                      {entry.details?.tool && entry.details?.llm_runtime ? " • " : ""}
+                                      {entry.details?.llm_runtime ? `Runtime: ${entry.details.llm_runtime}` : ""}
                                     </div>
                                   ) : null}
                                 </div>
                               ))}
+                              {!visibleAgentTrace.length ? (
+                                <div style={{fontSize: 13, color: 'var(--text-muted)'}}>
+                                  Agent trace will appear here once the multi-agent coordinator publishes the incident workflow.
+                                </div>
+                              ) : null}
                             </div>
+
+                            {visibleAgentMessages.length ? (
+                              <>
+                                <div className="card-title" style={{marginTop: 24, marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>AGENT HANDOFFS</div>
+                                <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
+                                  {visibleAgentMessages.map((entry, idx) => (
+                                    <div key={idx} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                                      <div className="flex-between" style={{marginBottom: 6}}>
+                                        <span style={{fontWeight: 600, fontSize: 13}}>{entry.from} → {entry.to}</span>
+                                        <span style={{fontSize: 12, color: 'var(--text-subtle)'}}>{entry.subject}</span>
+                                      </div>
+                                      <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6}}>{entry.content}</div>
+                                      {entry.artifacts?.tool || entry.artifacts?.current_stage ? (
+                                        <div style={{fontSize: 12, color: 'var(--text-subtle)', marginTop: 6}}>
+                                          {entry.artifacts?.tool ? `Tool: ${entry.artifacts.tool}` : ""}
+                                          {entry.artifacts?.tool && entry.artifacts?.current_stage ? " • " : ""}
+                                          {entry.artifacts?.current_stage ? `Stage: ${entry.artifacts.current_stage}` : ""}
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  ))}
+                                </div>
+                              </>
+                            ) : null}
+
+                            {(selectedIncident.protocol_trace || []).length ? (
+                              <>
+                                <div className="card-title" style={{marginTop: 24, marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>A2A INVOCATION TRACE</div>
+                                <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
+                                  {(selectedIncident.protocol_trace || []).map((entry, idx) => (
+                                    <div key={idx} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                                      <div className="flex-between" style={{marginBottom: 8}}>
+                                        <span style={{fontWeight: 600, fontSize: 13}}>{entry.from_agent} → {entry.to_agent}</span>
+                                        <span style={{fontSize: 12, color: 'var(--text-subtle)'}}>{entry.protocol}</span>
+                                      </div>
+                                      <div style={{fontSize: 13, color: 'var(--text-muted)', marginBottom: 8}}>
+                                        Runtime: {entry.runtime} • Task ID: {entry.task_id}
+                                      </div>
+                                      <div style={{fontSize: 12, color: 'var(--text-subtle)', lineHeight: 1.6}}>
+                                        Stage: {entry.output_summary?.current_stage || "n/a"} • Approval: {entry.output_summary?.approval_status || "n/a"}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </>
+                            ) : null}
+
+                            {(selectedIncident.tool_trace || []).length ? (
+                              <>
+                                <div className="card-title" style={{marginTop: 24, marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>MCP TOOL TRACE</div>
+                                <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
+                                  {(selectedIncident.tool_trace || []).map((entry, idx) => (
+                                    <div key={idx} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                                      <div className="flex-between" style={{marginBottom: 8}}>
+                                        <span style={{fontWeight: 600, fontSize: 13}}>{entry.agent}</span>
+                                        <span style={{fontSize: 12, color: 'var(--text-subtle)'}}>{entry.tool}</span>
+                                      </div>
+                                      <div style={{fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6}}>
+                                        Output stage: {entry.output_summary?.current_stage || 'n/a'} • Approval: {entry.output_summary?.approval_status || 'n/a'}
+                                      </div>
+                                      {entry.llm_agent ? (
+                                        <div style={{fontSize: 12, color: 'var(--text-subtle)', marginTop: 6}}>
+                                          {entry.llm_agent} {entry.llm_used ? `used ${entry.llm_runtime || 'Gemini'}` : 'fell back to heuristic logic'}.
+                                        </div>
+                                      ) : null}
+                                      {entry.prompt_profile?.purpose ? (
+                                        <div style={{fontSize: 12, color: 'var(--text-subtle)', marginTop: 6}}>
+                                          Purpose: {entry.prompt_profile.purpose}
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  ))}
+                                </div>
+                              </>
+                            ) : null}
                           </>
-                        ) : null}
+                        )}
+
+                        <div className="card-title" style={{marginTop: 24, marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>CASE NOTES</div>
+                        <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
+                          {((selectedIncident.notes || []).length ? selectedIncident.notes : []).map((note, idx) => (
+                            <div key={idx} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                              <div className="flex-between" style={{marginBottom: 6}}>
+                                <span style={{fontWeight: 600, fontSize: 13}}>
+                                  {note.author}
+                                  {note.author_role ? (
+                                    <span style={{fontWeight: 500, color: 'var(--text-subtle)', marginLeft: 8, textTransform: 'capitalize'}}>
+                                      {note.author_role}
+                                    </span>
+                                  ) : null}
+                                </span>
+                                <span style={{fontSize: 12, color: 'var(--text-subtle)'}}>{new Date(note.created_at).toLocaleString()}</span>
+                              </div>
+                              <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6}}>{note.note}</div>
+                            </div>
+                          ))}
+                          {!(selectedIncident.notes || []).length ? (
+                            <div style={{fontSize: 13, color: 'var(--text-muted)'}}>No analyst notes yet.</div>
+                          ) : null}
+                          <textarea
+                            value={noteDraft}
+                            onChange={(event) => setNoteDraft(event.target.value)}
+                            placeholder="Add an analyst note, investigation update, or escalation comment..."
+                            style={{...inputStyle, minHeight: 110, resize: 'vertical'}}
+                          />
+                          <div>
+                            <button className="btn btn-secondary" onClick={addIncidentNote} disabled={notesSaving || !noteDraft.trim()}>
+                              {notesSaving ? 'Saving note...' : 'Add note'}
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     ) : (
                       <div className="card" style={{display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 400, color: 'var(--text-muted)'}}>
