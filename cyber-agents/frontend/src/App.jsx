@@ -472,7 +472,7 @@ function App() {
       agent: entry.llm_agent || entry.agent,
       stage: entry.output_summary?.current_stage || entry.tool,
       summary: entry.llm_used
-        ? `${entry.llm_agent || entry.agent} used ${entry.tool} with OpenRouter-backed reasoning.`
+        ? `${entry.llm_agent || entry.agent} used ${entry.tool} with LLM-backed reasoning.`
         : `${entry.agent} executed ${entry.tool} through the MCP tool runtime.`,
       details: {
         tool: entry.tool,
@@ -495,7 +495,7 @@ function App() {
         to: next ? next.llm_agent || next.agent : "Dashboard",
         subject: entry.prompt_profile?.purpose || "Agent handoff",
         content: entry.llm_used
-          ? `${entry.llm_agent || entry.agent} completed an OpenRouter-backed reasoning step and passed the updated incident state forward.`
+          ? `${entry.llm_agent || entry.agent} completed an LLM-backed reasoning step and passed the updated incident state forward.`
           : `${entry.agent} finished ${entry.tool} and passed the structured result to the next stage.`,
         artifacts: {
           tool: entry.tool,
@@ -529,7 +529,7 @@ function App() {
           speaker: entry.llm_agent || entry.agent,
           audience: next ? next.llm_agent || next.agent : "SOC Dashboard",
           message: entry.llm_used
-            ? `I completed ${entry.tool} using OpenRouter-backed reasoning. Please take the updated state and continue the workflow.`
+            ? `I completed ${entry.tool} using LLM-backed reasoning. Please take the updated state and continue the workflow.`
             : `I completed ${entry.tool} using deterministic logic. Please continue with the updated incident state.`,
           stage: entry.output_summary?.current_stage || entry.tool,
           kind: "handoff",
@@ -1298,7 +1298,7 @@ function App() {
                                     ) : null}
                                   </span>
                                   <span style={{fontSize: 12, color: 'var(--text-subtle)', textTransform: 'capitalize'}}>
-                                    {discussion.source === 'gemini' ? 'OpenRouter model' : 'Fallback'}
+                                    {discussion.source === 'gemini' ? 'LLM' : 'Fallback'}
                                   </span>
                                 </div>
                                 <div style={{fontSize: 14, color: 'var(--text-muted)', lineHeight: 1.7}}>
@@ -1842,7 +1842,7 @@ function App() {
                                     {entry.message}
                                   </div>
                                   <div style={{fontSize: 12, color: 'var(--text-subtle)', marginTop: 8, textTransform: 'capitalize'}}>
-                                    {entry.source === 'gemini' ? 'Generated with OpenRouter model' : 'Local fallback'}
+                                    {entry.source === 'gemini' ? 'Generated with LLM' : 'Local fallback'}
                                   </div>
                                 </div>
                               ))}
@@ -1940,7 +1940,7 @@ function App() {
                                       </div>
                                       {entry.llm_agent ? (
                                         <div style={{fontSize: 12, color: 'var(--text-subtle)', marginTop: 6}}>
-                                          {entry.llm_agent} {entry.llm_used ? `used ${entry.llm_runtime || 'OpenRouter model'}` : 'fell back to heuristic logic'}.
+                                          {entry.llm_agent} {entry.llm_used ? `used ${entry.llm_runtime || 'Ollama'}` : 'fell back to heuristic logic'}.
                                         </div>
                                       ) : null}
                                       {entry.prompt_profile?.purpose ? (
@@ -2010,7 +2010,7 @@ function App() {
                               ))}
                               {!visibleReasoningTrace.length ? (
                                 <div style={{fontSize: 13, color: 'var(--text-muted)'}}>
-                                  Raw OpenRouter planner and agent reasoning will appear here for new incidents once the backend captures it.
+                                  Raw LLM planner and agent reasoning will appear here for new incidents once the backend captures it.
                                 </div>
                               ) : null}
                             </div>

@@ -293,7 +293,7 @@ Rules:
     if not response:
         return fallback, result
     cleaned = _clean_json_payload(response).strip().strip('"').strip("'")
-    if not cleaned or cleaned.startswith("{") or "OpenRouter unavailable" in cleaned:
+    if not cleaned or cleaned.startswith("{"):
         result["used"] = False
         return fallback, result
     result["text"] = cleaned
