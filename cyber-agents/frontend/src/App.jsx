@@ -519,18 +519,6 @@ function App() {
     return dedupeDiscussionEntries(discussion);
   }, [selectedIncident]);
 
-  const uniqueLiveDiscussionFeed = useMemo(
-    () =>
-      dedupeDiscussionEntries(
-        liveDiscussionFeed.map((entry) => ({
-          ...entry.data.agent_discussion_entry,
-          _feedId: entry.id,
-          _timestamp: entry.timestamp,
-        }))
-      ),
-    [liveDiscussionFeed]
-  );
-
   const stats = useMemo(
     () => ({
       incidents: websiteIncidents.length,
@@ -597,6 +585,18 @@ function App() {
     () =>
       feed.filter((entry) => entry.data?.agent_discussion_entry && (!selectedWebsiteId || entry.data.website_id === selectedWebsiteId)),
     [feed, selectedWebsiteId]
+  );
+
+  const uniqueLiveDiscussionFeed = useMemo(
+    () =>
+      dedupeDiscussionEntries(
+        liveDiscussionFeed.map((entry) => ({
+          ...entry.data.agent_discussion_entry,
+          _feedId: entry.id,
+          _timestamp: entry.timestamp,
+        }))
+      ),
+    [liveDiscussionFeed]
   );
 
   const pageMeta = useMemo(
@@ -1289,30 +1289,6 @@ function App() {
                           </div>
                         )) : (
                           <div style={{color: 'var(--text-muted)', fontSize: 13}}>Jobs will appear as collector ingests and incident workflows run.</div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="grid-layout">
-                    <div className="card">
-                      <div className="card-title" style={{marginBottom: 16}}>Reporting agent outputs</div>
-                      <div style={{display: 'grid', gap: 12}}>
-                        {reportIncidents.length ? reportIncidents.slice(0, 6).map((incident) => (
-                          <div key={incident.attack_id} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 12, border: '1px solid var(--border-color)'}}>
-                            <div className="flex-between" style={{marginBottom: 6}}>
-                              <span style={{fontWeight: 700, fontSize: 13}}>{incident.incident_report.report_id}</span>
-                              <span style={{fontSize: 12, color: 'var(--text-subtle)'}}>{incident.classification?.predicted_class || 'Incident'}</span>
-                            </div>
-                            <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6, marginBottom: 8}}>
-                              {incident.incident_report.executive_summary}
-                            </div>
-                            <button className="btn btn-secondary" style={{padding: '8px 12px'}} onClick={() => { setCurrentTab('incidents'); setSelectedIncidentId(incident.attack_id); setIncidentDetailTab('report'); }}>
-                              Open report
-                            </button>
-                          </div>
-                        )) : (
-                          <div style={{fontSize: 13, color: 'var(--text-muted)'}}>Generated reports will appear here after the reporting agent completes an incident.</div>
                         )}
                       </div>
                     </div>
