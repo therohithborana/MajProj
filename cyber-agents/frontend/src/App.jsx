@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { LayoutDashboard, ShieldAlert, Activity, Settings, Bell, Search, PanelLeftClose, PanelLeftOpen, FileText } from "lucide-react";
+import { LayoutDashboard, ShieldAlert, Activity, Settings, Bell, Search, PanelLeftClose, PanelLeftOpen, FileText, X } from "lucide-react";
 
 const API_BASE = "http://localhost:8000";
 const WS_URL = "ws://localhost:8000/ws";
@@ -431,7 +431,7 @@ function App() {
     [incidents, selectedWebsiteId, severityFilter, approvalFilter, searchTerm]
   );
   const selectedIncident =
-    websiteIncidents.find((incident) => incident.attack_id === selectedIncidentId) || websiteIncidents[0] || null;
+    websiteIncidents.find((incident) => incident.attack_id === selectedIncidentId) || null;
 
   useEffect(() => {
     setAssigneeDraft(selectedIncident?.assignee?.name || "");
@@ -440,6 +440,25 @@ function App() {
   useEffect(() => {
     setIncidentDetailTab("discussion");
   }, [selectedIncident?.attack_id]);
+
+  useEffect(() => {
+    if (selectedIncidentId && !websiteIncidents.some((incident) => incident.attack_id === selectedIncidentId)) {
+      setSelectedIncidentId("");
+    }
+  }, [selectedIncidentId, websiteIncidents]);
+
+  useEffect(() => {
+    function handleEscape(event) {
+      if (event.key === "Escape") {
+        setSelectedIncidentId("");
+      }
+    }
+    if (selectedIncident) {
+      document.addEventListener("keydown", handleEscape);
+      return () => document.removeEventListener("keydown", handleEscape);
+    }
+    return undefined;
+  }, [selectedIncident]);
 
   const visibleAgentTrace = useMemo(() => {
     if (!selectedIncident) {
@@ -795,6 +814,13 @@ function App() {
     setShowProfileMenu(false);
   }
 
+  function scrollLandingSection(sectionId) {
+    const target = document.getElementById(sectionId);
+    if (target) {
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
+
   if (!user) {
     return (
       <div style={pageStyle}>
@@ -809,14 +835,14 @@ function App() {
               <div style={landingBrandMarkStyle}>C</div>
               <div>
                 <div style={landingBrandNameStyle}>CyberAgent</div>
-                <div style={landingBrandSubStyle}>Autonomous AI SOC for startups</div>
+                <div style={landingBrandSubStyle}>Security operations workspace</div>
               </div>
             </div>
             <nav style={landingNavStyle}>
-              <span>How it works</span>
-              <span>Features</span>
-              <span>Security</span>
-              <span>Reviews</span>
+              <button style={landingNavButtonStyle} onClick={() => scrollLandingSection("how-it-works")}>How it works</button>
+              <button style={landingNavButtonStyle} onClick={() => scrollLandingSection("features")}>Features</button>
+              <button style={landingNavButtonStyle} onClick={() => scrollLandingSection("security")}>Security</button>
+              <button style={landingNavButtonStyle} onClick={() => scrollLandingSection("reviews")}>Reviews</button>
             </nav>
           </header>
 
@@ -824,7 +850,7 @@ function App() {
             <div style={{ maxWidth: 700 }}>
               <div style={landingBadgeStyle}>Featured architecture: hybrid AI + SOC automation</div>
               <div style={heroTitleStyle}>
-                Multi-agent cyber defense for modern startups and customer-facing applications.
+                Multi-agent security operations for monitored web and network environments.
               </div>
               <div style={heroBodyStyle}>
                 Ingest application, authentication, and network telemetry into one autonomous platform that
@@ -894,8 +920,91 @@ function App() {
             </div>
           </div>
 
+          <section id="how-it-works" style={landingSectionStyle}>
+            <div style={landingSectionIntroStyle}>
+              <div style={landingSectionEyebrowStyle}>How it works</div>
+              <div style={landingSectionTitleStyle}>A structured incident workflow from telemetry to response.</div>
+              <div style={landingSectionBodyStyle}>
+                Security events are ingested, normalized, analyzed by specialist agents, and escalated into coordinated response steps with analyst oversight where needed.
+              </div>
+            </div>
+            <div style={landingFeatureGridStyle}>
+              <div style={landingFeatureCardStyle}>
+                <div style={landingFeatureStepStyle}>01</div>
+                <div style={landingFeatureTitleStyle}>Collect</div>
+                <div style={landingFeatureBodyStyle}>Application, authentication, and network signals are streamed into the monitoring pipeline.</div>
+              </div>
+              <div style={landingFeatureCardStyle}>
+                <div style={landingFeatureStepStyle}>02</div>
+                <div style={landingFeatureTitleStyle}>Analyze</div>
+                <div style={landingFeatureBodyStyle}>Detection, correlation, classification, and challenge-review agents evaluate the evidence.</div>
+              </div>
+              <div style={landingFeatureCardStyle}>
+                <div style={landingFeatureStepStyle}>03</div>
+                <div style={landingFeatureTitleStyle}>Respond</div>
+                <div style={landingFeatureBodyStyle}>Policy, mitigation, reporting, and approval workflows keep response controlled and auditable.</div>
+              </div>
+            </div>
+          </section>
+
+          <section id="features" style={landingSectionStyle}>
+            <div style={landingSectionIntroStyle}>
+              <div style={landingSectionEyebrowStyle}>Features</div>
+              <div style={landingSectionTitleStyle}>Built for continuous monitoring and analyst visibility.</div>
+            </div>
+            <div style={landingFeatureGridStyle}>
+              <div style={landingFeatureCardStyle}>
+                <div style={landingFeatureTitleStyle}>Live telemetry workspace</div>
+                <div style={landingFeatureBodyStyle}>Review separated application, authentication, and network activity in one operator view.</div>
+              </div>
+              <div style={landingFeatureCardStyle}>
+                <div style={landingFeatureTitleStyle}>Multi-agent investigation</div>
+                <div style={landingFeatureBodyStyle}>Inspect discussion, handoffs, coordinator planning, and tool usage for each incident.</div>
+              </div>
+              <div style={landingFeatureCardStyle}>
+                <div style={landingFeatureTitleStyle}>Report generation</div>
+                <div style={landingFeatureBodyStyle}>Produce executive summaries, analyst notes, and response documentation from the same workflow.</div>
+              </div>
+            </div>
+          </section>
+
+          <section id="security" style={landingSectionStyle}>
+            <div style={landingSectionIntroStyle}>
+              <div style={landingSectionEyebrowStyle}>Security</div>
+              <div style={landingSectionTitleStyle}>Controlled automation with traceable decisions.</div>
+            </div>
+            <div style={landingSecurityGridStyle}>
+              <div style={landingSecurityCardStyle}>
+                <div style={landingFeatureTitleStyle}>Approval-aware execution</div>
+                <div style={landingFeatureBodyStyle}>Response actions can pause for analyst approval before any higher-risk containment step.</div>
+              </div>
+              <div style={landingSecurityCardStyle}>
+                <div style={landingFeatureTitleStyle}>Traceable reasoning</div>
+                <div style={landingFeatureBodyStyle}>Agent discussions, tool traces, and planner decisions remain visible across the incident lifecycle.</div>
+              </div>
+            </div>
+          </section>
+
+          <section id="reviews" style={landingSectionStyle}>
+            <div style={landingSectionIntroStyle}>
+              <div style={landingSectionEyebrowStyle}>Reviews</div>
+              <div style={landingSectionTitleStyle}>Operational value focused on visibility and response discipline.</div>
+            </div>
+            <div style={landingFeatureGridStyle}>
+              <div style={landingQuoteCardStyle}>
+                “The incident workflow is readable enough for analysts and structured enough for automation.”
+              </div>
+              <div style={landingQuoteCardStyle}>
+                “Useful separation between telemetry review, response operations, and report generation.”
+              </div>
+              <div style={landingQuoteCardStyle}>
+                “A practical operator experience rather than a generic AI demo surface.”
+              </div>
+            </div>
+          </section>
+
           <footer style={landingFooterStyle}>
-            <span>Integrates with startup web apps, auth services, collector agents, and network telemetry pipelines</span>
+            <span>Integrates with monitored applications, identity services, collector agents, and network telemetry pipelines</span>
           </footer>
         </div>
       </div>
@@ -1503,7 +1612,7 @@ function App() {
               )}
 
               {currentTab === 'incidents' && (
-                <div className="grid-layout">
+                <div>
                   <div className="card" style={{padding: '16px 0'}}>
                     <div className="card-title" style={{padding: '0 16px', marginBottom: 12}}>Incident Queue</div>
                     <div style={{display: 'flex', gap: 8, padding: '0 16px 12px', flexWrap: 'wrap'}}>
@@ -1528,7 +1637,7 @@ function App() {
                         const severity = incident.classification?.attack?.severity || "LOW";
                         const policyMode = incident.policy_decision?.mode || "approval_required";
                         return (
-                          <div key={incident.attack_id} className={`table-row-clickable ${selectedIncidentId === incident.attack_id ? 'active' : ''}`} onClick={() => setSelectedIncidentId(incident.attack_id)} style={{padding: '16px', borderBottom: '1px solid var(--border-color)', background: selectedIncidentId === incident.attack_id ? 'var(--panel-alt)' : 'transparent'}}>
+                          <div key={incident.attack_id} className={`table-row-clickable ${selectedIncidentId === incident.attack_id ? 'active' : ''}`} onClick={() => setSelectedIncidentId(incident.attack_id)} style={{padding: '18px 16px', borderBottom: '1px solid var(--border-color)', background: selectedIncidentId === incident.attack_id ? 'var(--panel-alt)' : 'transparent', cursor: 'pointer'}}>
                             <div className="flex-between" style={{marginBottom: 8}}>
                               <span style={{fontWeight: 600}}>{incident.classification?.predicted_class || incident.attack_id}</span>
                               <span className={`status-pill badge-${severity === 'CRITICAL' ? 'red' : severity === 'HIGH' ? 'amber' : 'amber'}`}>{severity}</span>
@@ -1544,15 +1653,43 @@ function App() {
                       }) : <div style={{padding: 24, textAlign: 'center', color: 'var(--text-muted)'}}>No incidents found.</div>}
                     </div>
                   </div>
-                  
-                  <div>
-                    {selectedIncident ? (
-                      <div className="card">
+
+                  {selectedIncident ? (
+                    <div
+                      onClick={() => setSelectedIncidentId("")}
+                      style={{
+                        position: 'fixed',
+                        inset: 0,
+                        zIndex: 80,
+                        background: 'rgba(7, 7, 10, 0.72)',
+                        backdropFilter: 'blur(10px)',
+                        display: 'flex',
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                        padding: 20,
+                      }}
+                    >
+                      <div
+                        className="card"
+                        onClick={(event) => event.stopPropagation()}
+                        style={{
+                          width: 'min(960px, calc(100vw - 48px))',
+                          maxWidth: '100%',
+                          height: 'min(88vh, 980px)',
+                          overflowY: 'auto',
+                          borderRadius: 28,
+                          padding: 24,
+                          boxShadow: '0 24px 80px rgba(0,0,0,0.45)',
+                        }}
+                      >
                         <div className="flex-between" style={{marginBottom: 16}}>
                           <div>
                             <div style={{fontSize: 12, color: 'var(--color-gold)', fontWeight: 600, marginBottom: 4}}>INCIDENT DETAILS</div>
                             <div className="card-title" style={{fontSize: 20}}>{selectedIncident.classification?.predicted_class || selectedIncident.attack_id}</div>
                           </div>
+                          <button className="btn btn-secondary" style={{padding: 10, minWidth: 42}} onClick={() => setSelectedIncidentId("")}>
+                            <X size={18} />
+                          </button>
                         </div>
                         <div style={{color: 'var(--text-muted)', fontSize: 14, lineHeight: 1.6, marginBottom: 24}}>
                           {selectedIncident.anomaly?.summary || selectedIncident.simulation?.description}
@@ -1872,12 +2009,8 @@ function App() {
                           </>
                         ) : null}
                       </div>
-                    ) : (
-                      <div className="card" style={{display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 400, color: 'var(--text-muted)'}}>
-                        Select an incident to view details
-                      </div>
-                    )}
-                  </div>
+                    </div>
+                  ) : null}
                 </div>
               )}
 
@@ -2032,6 +2165,15 @@ const landingNavStyle = {
   fontSize: 14,
 };
 
+const landingNavButtonStyle = {
+  background: "transparent",
+  border: "none",
+  color: colors.muted,
+  fontSize: 14,
+  padding: 0,
+  cursor: "pointer",
+};
+
 const landingBadgeStyle = {
   display: "inline-flex",
   alignItems: "center",
@@ -2103,6 +2245,96 @@ const landingStatValueStyle = {
 const landingStatLabelStyle = {
   fontSize: 13,
   color: colors.muted,
+};
+
+const landingSectionStyle = {
+  padding: "28px 0 0",
+  marginTop: 28,
+};
+
+const landingSectionIntroStyle = {
+  maxWidth: 780,
+  marginBottom: 20,
+};
+
+const landingSectionEyebrowStyle = {
+  color: colors.gold,
+  fontSize: 12,
+  fontWeight: 800,
+  letterSpacing: 1.4,
+  textTransform: "uppercase",
+  marginBottom: 12,
+};
+
+const landingSectionTitleStyle = {
+  fontSize: 34,
+  lineHeight: 1.15,
+  fontWeight: 800,
+  letterSpacing: -0.8,
+  marginBottom: 12,
+};
+
+const landingSectionBodyStyle = {
+  fontSize: 16,
+  lineHeight: 1.8,
+  color: colors.muted,
+};
+
+const landingFeatureGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+  gap: 18,
+};
+
+const landingFeatureCardStyle = {
+  background: "rgba(19, 19, 20, 0.78)",
+  border: `1px solid ${colors.border}`,
+  borderRadius: 24,
+  padding: 22,
+  backdropFilter: "blur(12px)",
+};
+
+const landingFeatureStepStyle = {
+  color: colors.gold,
+  fontSize: 12,
+  fontWeight: 800,
+  letterSpacing: 1.4,
+  marginBottom: 12,
+};
+
+const landingFeatureTitleStyle = {
+  fontSize: 18,
+  fontWeight: 700,
+  marginBottom: 10,
+};
+
+const landingFeatureBodyStyle = {
+  fontSize: 14,
+  lineHeight: 1.7,
+  color: colors.muted,
+};
+
+const landingSecurityGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+  gap: 18,
+};
+
+const landingSecurityCardStyle = {
+  background: "linear-gradient(180deg, rgba(139, 92, 246, 0.08), rgba(19, 19, 20, 0.82))",
+  border: `1px solid ${colors.border}`,
+  borderRadius: 24,
+  padding: 22,
+};
+
+const landingQuoteCardStyle = {
+  background: "rgba(19, 19, 20, 0.78)",
+  border: `1px solid ${colors.border}`,
+  borderRadius: 24,
+  padding: 22,
+  color: colors.text,
+  fontSize: 16,
+  lineHeight: 1.8,
 };
 
 const topBarStyle = {
