@@ -209,10 +209,18 @@ def _telemetry_snapshot(website_id: str):
         serialize_document(document)
         for document in db.events.find({"website_id": website_id}).sort("timestamp", -1).limit(12)
     ]
+    recent_by_type = {
+        event_type: [
+            serialize_document(document)
+            for document in db.events.find({"website_id": website_id, "event_type": event_type}).sort("timestamp", -1).limit(8)
+        ]
+        for event_type in ["access", "auth", "network"]
+    }
     return {
         "total_events": total_events,
         "counts": counts,
         "recent_events": recent_events,
+        "recent_by_type": recent_by_type,
     }
 
 

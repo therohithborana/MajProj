@@ -145,6 +145,18 @@ function IconButton({ onClick, children, active = false, title }) {
   );
 }
 
+function dedupeDiscussionEntries(entries = []) {
+  const seen = new Set();
+  return entries.filter((entry) => {
+    const key = `${entry.speaker || ""}|${entry.audience || ""}|${entry.stage || ""}|${entry.message || ""}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
 function App() {
   const [mode, setMode] = useState("login");
   const [token, setToken] = useState(localStorage.getItem(TOKEN_KEY) || "");
@@ -154,7 +166,7 @@ function App() {
   const [incidents, setIncidents] = useState({});
   const [selectedIncidentId, setSelectedIncidentId] = useState("");
   const [feed, setFeed] = useState([]);
-  const [telemetry, setTelemetry] = useState({ total_events: 0, counts: {}, recent_events: [] });
+  const [telemetry, setTelemetry] = useState({ total_events: 0, counts: {}, recent_events: [], recent_by_type: {} });
   const [observability, setObservability] = useState({
     enabled: false,
     metrics: { event_type_counts: {}, failed_auth_events: 0, tool_executions: 0, incidents_detected: 0 },
@@ -194,7 +206,7 @@ function App() {
       setUser(null);
       setWebsites([]);
       setSelectedWebsiteId("");
-      setTelemetry({ total_events: 0, counts: {}, recent_events: [] });
+      setTelemetry({ total_events: 0, counts: {}, recent_events: [], recent_by_type: {} });
       setAnalytics({ totals: {}, by_class: {}, by_severity: {}, by_status: {} });
       setJobs([]);
       setObservability({
@@ -504,8 +516,20 @@ function App() {
         });
       });
     }
-    return discussion;
+    return dedupeDiscussionEntries(discussion);
   }, [selectedIncident]);
+
+  const uniqueLiveDiscussionFeed = useMemo(
+    () =>
+      dedupeDiscussionEntries(
+        liveDiscussionFeed.map((entry) => ({
+          ...entry.data.agent_discussion_entry,
+          _feedId: entry.id,
+          _timestamp: entry.timestamp,
+        }))
+      ),
+    [liveDiscussionFeed]
+  );
 
   const stats = useMemo(
     () => ({
@@ -531,16 +555,24 @@ function App() {
     [websiteIncidents]
   );
   const accessEvents = useMemo(
-    () => (telemetry.recent_events || []).filter((event) => event.event_type === "access").slice(0, 6),
+    () => (telemetry.recent_by_type?.access || (telemetry.recent_events || []).filter((event) => event.event_type === "access")).slice(0, 6),
     [telemetry]
   );
   const authEvents = useMemo(
-    () => (telemetry.recent_events || []).filter((event) => event.event_type === "auth").slice(0, 6),
+    () => (telemetry.recent_by_type?.auth || (telemetry.recent_events || []).filter((event) => event.event_type === "auth")).slice(0, 6),
     [telemetry]
   );
   const networkEvents = useMemo(
-    () => (telemetry.recent_events || []).filter((event) => event.event_type === "network").slice(0, 6),
+    () => (telemetry.recent_by_type?.network || (telemetry.recent_events || []).filter((event) => event.event_type === "network")).slice(0, 6),
     [telemetry]
+  );
+  const channelCounts = useMemo(
+    () => ({
+      access: Math.max(observability.channels?.application_logs?.events_seen || 0, telemetry.counts?.access || 0),
+      auth: Math.max(observability.channels?.authentication_logs?.events_seen || 0, telemetry.counts?.auth || 0),
+      network: Math.max(observability.channels?.network_logs?.events_seen || 0, telemetry.counts?.network || 0),
+    }),
+    [observability, telemetry]
   );
 
   const notificationItems = useMemo(() => {
@@ -566,6 +598,38 @@ function App() {
       feed.filter((entry) => entry.data?.agent_discussion_entry && (!selectedWebsiteId || entry.data.website_id === selectedWebsiteId)),
     [feed, selectedWebsiteId]
   );
+
+  const pageMeta = useMemo(
+    () => ({
+      dashboard: {
+        eyebrow: "Executive view",
+        title: selectedWebsite ? `${selectedWebsite.name} command center` : "SOC dashboard",
+        description: "Watch live agent activity, triage health, and active detections without wading through raw telemetry.",
+      },
+      telemetry: {
+        eyebrow: "Telemetry workspace",
+        title: "Telemetry & observability",
+        description: "Review collector setup, live channels, and normalized application, authentication, and network logs.",
+      },
+      incidents: {
+        eyebrow: "Response operations",
+        title: "Threat detection",
+        description: "Track incidents, inspect agent reasoning, approve actions, and review the execution chain.",
+      },
+      reports: {
+        eyebrow: "Reporting",
+        title: "Generated reports",
+        description: "Browse executive summaries, completed writeups, and reporting-agent outputs across the workspace.",
+      },
+      settings: {
+        eyebrow: "Workspace",
+        title: "Workspace settings",
+        description: "Manage project connection details, collector configuration, and tenant-level operating context.",
+      },
+    }),
+    [selectedWebsite]
+  );
+  const currentPageMeta = pageMeta[currentTab] || pageMeta.dashboard;
 
   async function submitAuth(targetMode) {
     try {
@@ -903,8 +967,31 @@ function App() {
       <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
         <div className="sidebar-header">
           <ShieldAlert className="sidebar-logo" size={28} />
-          {!sidebarCollapsed && <div className="sidebar-title">CyberAgent SOC</div>}
+          {!sidebarCollapsed && (
+            <div>
+              <div className="sidebar-title">CyberAgent SOC</div>
+              <div className="sidebar-subtitle">Autonomous response workspace</div>
+            </div>
+          )}
         </div>
+        {!sidebarCollapsed ? (
+          <div className="sidebar-workspace">
+            <div className="sidebar-workspace-label">Active project</div>
+            <select value={selectedWebsiteId} onChange={(event) => setSelectedWebsiteId(event.target.value)} className="sidebar-select">
+              {websites.map((website) => (
+                <option key={website._id} value={website._id}>
+                  {website.name}
+                </option>
+              ))}
+            </select>
+            {selectedWebsite ? (
+              <div className="sidebar-workspace-meta">
+                <span>{selectedWebsite.domain}</span>
+                <span>{selectedWebsite.environment}</span>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         <div className="sidebar-nav">
           <button className={`nav-item ${currentTab === 'dashboard' ? 'active' : ''}`} onClick={() => setCurrentTab('dashboard')}>
             <LayoutDashboard className="nav-item-icon" size={20} />
@@ -924,7 +1011,7 @@ function App() {
           </button>
         </div>
         <div className="sidebar-footer">
-          <button className="nav-item" onClick={() => setCurrentTab('telemetry')}>
+          <button className={`nav-item ${currentTab === 'settings' ? 'active' : ''}`} onClick={() => setCurrentTab('settings')}>
             <Settings className="nav-item-icon" size={20} />
             {!sidebarCollapsed && <span>Workspace Settings</span>}
           </button>
@@ -1007,68 +1094,24 @@ function App() {
           {error ? <div style={errorStyle}>{error}</div> : null}
           {selectedWebsite ? (
             <>
+              <div className="page-hero">
+                <div>
+                  <div className="page-eyebrow">{currentPageMeta.eyebrow}</div>
+                  <div className="page-title">{currentPageMeta.title}</div>
+                  <div className="page-description">{currentPageMeta.description}</div>
+                </div>
+                <div className="page-hero-actions">
+                  <StatusPill color={selectedWebsite.status === "connected" ? colors.green : colors.amber}>
+                    {selectedWebsite.status}
+                  </StatusPill>
+                  {currentTab !== "reports" ? (
+                    <button onClick={simulateAttack} className="btn btn-primary">Simulate Attack</button>
+                  ) : null}
+                </div>
+              </div>
+
               {currentTab === 'dashboard' && (
                 <div>
-                  <div className="flex-between" style={{marginBottom: 24}}>
-                    <div>
-                      <div className="card-title" style={{fontSize: 24}}>{selectedWebsite.name}</div>
-                      <div style={{color: 'var(--text-muted)'}}>{selectedWebsite.domain} • {selectedWebsite.environment}</div>
-                    </div>
-                    <div className="flex-gap">
-                      <button onClick={simulateAttack} className="btn btn-primary">Simulate Attack</button>
-                    </div>
-                  </div>
-
-                  <div className="card" style={{marginBottom: 24}}>
-                    <div className="card-title" style={{marginBottom: 16}}>Live Orchestration Feed</div>
-                    <div style={{display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 360, overflowY: 'auto'}}>
-                      {feed.filter(e => !selectedWebsiteId || e.data.website_id === selectedWebsiteId).map(entry => (
-                        <div key={entry.id} style={{padding: 12, background: 'rgba(255,255,255,0.03)', borderRadius: 12, borderLeft: `3px solid ${colors.gold}`}}>
-                          <div className="flex-between" style={{marginBottom: 6}}>
-                            <span style={{fontSize: 13, fontWeight: 600}}>{entry.data.agent_trace_entry?.agent || entry.type}</span>
-                            <span style={{fontSize: 11, color: 'var(--text-subtle)'}}>{new Date(entry.timestamp).toLocaleTimeString()}</span>
-                          </div>
-                          <div style={{fontSize: 13, color: 'var(--text-muted)'}}>{entry.data.message || entry.data.current_stage || "Event"}</div>
-                        </div>
-                      ))}
-                      {!feed.filter(e => !selectedWebsiteId || e.data.website_id === selectedWebsiteId).length ? (
-                        <div style={{fontSize: 13, color: 'var(--text-muted)'}}>Agent activity, approvals, and reporting steps will stream here live.</div>
-                      ) : null}
-                    </div>
-                  </div>
-
-                  <div className="card" style={{marginBottom: 24}}>
-                    <div className="card-title" style={{marginBottom: 16}}>Live Agent Conversation</div>
-                    <div style={{display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 320, overflowY: 'auto'}}>
-                      {liveDiscussionFeed.map((entry) => {
-                        const discussion = entry.data.agent_discussion_entry;
-                        return (
-                          <div key={entry.id} style={{padding: 14, background: 'rgba(139, 92, 246, 0.08)', borderRadius: 14, border: '1px solid var(--border-color)'}}>
-                            <div className="flex-between" style={{marginBottom: 8, gap: 12}}>
-                              <span style={{fontWeight: 700, fontSize: 13}}>
-                                {discussion.speaker}
-                                {discussion.audience ? (
-                                  <span style={{fontWeight: 500, color: 'var(--text-subtle)', marginLeft: 8}}>→ {discussion.audience}</span>
-                                ) : null}
-                              </span>
-                              <span style={{fontSize: 12, color: 'var(--text-subtle)', textTransform: 'capitalize'}}>
-                                {discussion.source === 'gemini' ? 'Gemini' : 'Fallback'}
-                              </span>
-                            </div>
-                            <div style={{fontSize: 14, color: 'var(--text-muted)', lineHeight: 1.7}}>
-                              {discussion.message}
-                            </div>
-                          </div>
-                        );
-                      })}
-                      {!liveDiscussionFeed.length ? (
-                        <div style={{fontSize: 13, color: 'var(--text-muted)'}}>
-                          Start a new incident to watch the agents discuss it live stage by stage.
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-
                   <div className="grid-metrics">
                     <div className="card">
                       <div className="card-header">
@@ -1101,6 +1144,96 @@ function App() {
                       </div>
                       <div className="card-value">{stats.approvals}</div>
                       <div style={{color: 'var(--text-subtle)', fontSize: 13}}>Queued for decision</div>
+                    </div>
+                  </div>
+
+                  <div className="page-grid page-grid-dashboard" style={{marginTop: 24}}>
+                    <div className="page-stack">
+                      <div className="card">
+                        <div className="card-title" style={{marginBottom: 16}}>Live orchestration feed</div>
+                        <div style={{display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 360, overflowY: 'auto'}}>
+                          {feed.filter(e => !selectedWebsiteId || e.data.website_id === selectedWebsiteId).map(entry => (
+                            <div key={entry.id} style={{padding: 12, background: 'rgba(255,255,255,0.03)', borderRadius: 12, borderLeft: `3px solid ${colors.gold}`}}>
+                              <div className="flex-between" style={{marginBottom: 6}}>
+                                <span style={{fontSize: 13, fontWeight: 600}}>{entry.data.agent_trace_entry?.agent || entry.type}</span>
+                                <span style={{fontSize: 11, color: 'var(--text-subtle)'}}>{new Date(entry.timestamp).toLocaleTimeString()}</span>
+                              </div>
+                              <div style={{fontSize: 13, color: 'var(--text-muted)'}}>{entry.data.message || entry.data.current_stage || "Event"}</div>
+                            </div>
+                          ))}
+                          {!feed.filter(e => !selectedWebsiteId || e.data.website_id === selectedWebsiteId).length ? (
+                            <div style={{fontSize: 13, color: 'var(--text-muted)'}}>Agent activity, approvals, and reporting steps will stream here live.</div>
+                          ) : null}
+                        </div>
+                      </div>
+
+                      <div className="card">
+                        <div className="card-title" style={{marginBottom: 16}}>Live agent conversation</div>
+                        <div style={{display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 320, overflowY: 'auto'}}>
+                          {uniqueLiveDiscussionFeed.map((discussion, index) => {
+                            return (
+                              <div key={`${discussion.speaker}-${discussion.stage}-${index}`} style={{padding: 14, background: 'rgba(139, 92, 246, 0.08)', borderRadius: 14, border: '1px solid var(--border-color)'}}>
+                                <div className="flex-between" style={{marginBottom: 8, gap: 12}}>
+                                  <span style={{fontWeight: 700, fontSize: 13}}>
+                                    {discussion.speaker}
+                                    {discussion.audience ? (
+                                      <span style={{fontWeight: 500, color: 'var(--text-subtle)', marginLeft: 8}}>→ {discussion.audience}</span>
+                                    ) : null}
+                                  </span>
+                                  <span style={{fontSize: 12, color: 'var(--text-subtle)', textTransform: 'capitalize'}}>
+                                    {discussion.source === 'gemini' ? 'Gemini' : 'Fallback'}
+                                  </span>
+                                </div>
+                                <div style={{fontSize: 14, color: 'var(--text-muted)', lineHeight: 1.7}}>
+                                  {discussion.message}
+                                </div>
+                              </div>
+                            );
+                          })}
+                          {!uniqueLiveDiscussionFeed.length ? (
+                            <div style={{fontSize: 13, color: 'var(--text-muted)'}}>
+                              Start a new incident to watch the agents discuss it live stage by stage.
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="page-stack">
+                      <div className="card">
+                        <div className="card-title" style={{marginBottom: 16}}>Operations snapshot</div>
+                        <div style={{display: 'grid', gap: 12}}>
+                          {topAttackClasses.length ? topAttackClasses.map(([label, count]) => (
+                            <div key={label} className="metric-list-item">
+                              <span style={{fontWeight: 600, fontSize: 13}}>{label}</span>
+                              <span style={{fontSize: 13, color: 'var(--text-muted)'}}>{count} cases</span>
+                            </div>
+                          )) : (
+                            <div style={{color: 'var(--text-muted)', fontSize: 13}}>Attack-class analytics will appear once incidents accumulate.</div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="card">
+                        <div className="card-title" style={{marginBottom: 16}}>Recent pipeline jobs</div>
+                        <div style={{display: 'grid', gap: 12}}>
+                          {recentJobs.length ? recentJobs.map((job) => (
+                            <div key={job._id} className="metric-list-item metric-list-item-block">
+                              <div className="flex-between" style={{marginBottom: 6}}>
+                                <span style={{fontWeight: 600, fontSize: 13}}>{job.job_type.replace(/_/g, ' ')}</span>
+                                <span className={`status-pill ${job.status === 'completed' ? 'badge-green' : job.status === 'failed' ? 'badge-red' : job.status === 'awaiting_approval' ? 'badge-blue' : 'badge-amber'}`}>
+                                  {job.status.replace(/_/g, ' ')}
+                                </span>
+                              </div>
+                              <div style={{fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6}}>
+                                Attack: {job.metadata?.attack_id || 'n/a'} • Phase: {job.metadata?.phase || 'queued'}
+                              </div>
+                            </div>
+                          )) : (
+                            <div style={{color: 'var(--text-muted)', fontSize: 13}}>Jobs will appear as collector ingests and incident workflows run.</div>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   </div>
 
@@ -1163,21 +1296,7 @@ function App() {
 
                   <div className="grid-layout">
                     <div className="card">
-                      <div className="card-title" style={{marginBottom: 16}}>Projects</div>
-                      <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
-                        {websites.map(w => (
-                          <div key={w._id} className={`table-row-clickable ${selectedWebsiteId === w._id ? 'active' : ''}`} onClick={() => setSelectedWebsiteId(w._id)} style={{padding: 12, border: '1px solid var(--border-color)', borderRadius: 8, background: selectedWebsiteId === w._id ? 'var(--panel-alt)' : 'transparent'}}>
-                            <div className="flex-between" style={{marginBottom: 4}}>
-                              <span style={{fontWeight: 600}}>{w.name}</span>
-                              <StatusPill color={w.status === 'connected' ? 'var(--color-green)' : 'var(--color-amber)'}>{w.status}</StatusPill>
-                            </div>
-                            <div style={{fontSize: 12, color: 'var(--text-subtle)'}}>{w.domain}</div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="card">
-                      <div className="card-title" style={{marginBottom: 16}}>Reporting Agent Outputs</div>
+                      <div className="card-title" style={{marginBottom: 16}}>Reporting agent outputs</div>
                       <div style={{display: 'grid', gap: 12}}>
                         {reportIncidents.length ? reportIncidents.slice(0, 6).map((incident) => (
                           <div key={incident.attack_id} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 12, border: '1px solid var(--border-color)'}}>
@@ -1205,15 +1324,15 @@ function App() {
                       <div className="grid-metrics" style={{gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12, marginBottom: 16}}>
                         <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
                           <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>APP LOGS</div>
-                          <div style={{fontWeight: 700, fontSize: 16}}>{observability.channels?.application_logs?.events_seen || 0}</div>
+                          <div style={{fontWeight: 700, fontSize: 16}}>{channelCounts.access}</div>
                         </div>
                         <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
                           <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>AUTH LOGS</div>
-                          <div style={{fontWeight: 700, fontSize: 16}}>{observability.channels?.authentication_logs?.events_seen || 0}</div>
+                          <div style={{fontWeight: 700, fontSize: 16}}>{channelCounts.auth}</div>
                         </div>
                         <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
                           <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>NETWORK LOGS</div>
-                          <div style={{fontWeight: 700, fontSize: 16}}>{observability.channels?.network_logs?.events_seen || 0}</div>
+                          <div style={{fontWeight: 700, fontSize: 16}}>{channelCounts.network}</div>
                         </div>
                         <div style={{background: 'var(--bg-canvas)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
                           <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>FAILED AUTH SIGNALS</div>
@@ -1270,9 +1389,9 @@ function App() {
 
               {currentTab === 'telemetry' && (
                 <div>
-                  <div className="card" style={{marginBottom: 24}}>
-                    <div className="card-title" style={{marginBottom: 16}}>Collector Setup</div>
-                    <div className="grid-layout">
+                  <div className="page-grid page-grid-telemetry" style={{marginBottom: 24}}>
+                    <div className="card">
+                      <div className="card-title" style={{marginBottom: 16}}>Collector setup</div>
                       <div>
                         <div style={{marginBottom: 16, color: 'var(--text-muted)'}}>
                           Use this project token in the dummy storefront so browsing, login activity, and suspicious behavior map into the correct protected application.
@@ -1301,20 +1420,21 @@ function App() {
                           </div>
                         </div>
                       </div>
-                      <div className="card" style={{background: 'var(--bg-canvas)', border: '1px solid var(--border-color)'}}>
+                      </div>
+                      <div className="card telemetry-summary-card">
                         <div className="card-title" style={{marginBottom: 16}}>OpenTelemetry Monitor</div>
                         <div className="grid-metrics" style={{gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12, marginBottom: 16}}>
                           <div style={{background: 'rgba(255,255,255,0.03)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
                             <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>APPLICATION LOGS</div>
-                            <div style={{fontWeight: 700, fontSize: 18}}>{observability.channels?.application_logs?.events_seen || 0}</div>
+                            <div style={{fontWeight: 700, fontSize: 18}}>{channelCounts.access}</div>
                           </div>
                           <div style={{background: 'rgba(255,255,255,0.03)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
                             <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>AUTHENTICATION LOGS</div>
-                            <div style={{fontWeight: 700, fontSize: 18}}>{observability.channels?.authentication_logs?.events_seen || 0}</div>
+                            <div style={{fontWeight: 700, fontSize: 18}}>{channelCounts.auth}</div>
                           </div>
                           <div style={{background: 'rgba(255,255,255,0.03)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
                             <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>NETWORK LOGS</div>
-                            <div style={{fontWeight: 700, fontSize: 18}}>{observability.channels?.network_logs?.events_seen || 0}</div>
+                            <div style={{fontWeight: 700, fontSize: 18}}>{channelCounts.network}</div>
                           </div>
                           <div style={{background: 'rgba(255,255,255,0.03)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
                             <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>FAILED LOGIN SIGNALS</div>
@@ -1325,7 +1445,6 @@ function App() {
                           The monitoring layer is capturing live application, authentication, and network activity from the storefront. When failed logins or suspicious scans start, those same signals feed the detection chain.
                         </div>
                       </div>
-                    </div>
                   </div>
                   
                   <div className="card">
@@ -1782,6 +1901,51 @@ function App() {
                         Select an incident to view details
                       </div>
                     )}
+                  </div>
+                </div>
+              )}
+
+              {currentTab === 'settings' && (
+                <div className="page-grid page-grid-settings">
+                  <div className="card">
+                    <div className="card-title" style={{marginBottom: 16}}>Workspace profile</div>
+                    <div className="settings-grid">
+                      <div className="settings-key">Project</div>
+                      <div className="settings-value">{selectedWebsite.name}</div>
+                      <div className="settings-key">Domain</div>
+                      <div className="settings-value">{selectedWebsite.domain}</div>
+                      <div className="settings-key">Environment</div>
+                      <div className="settings-value">{selectedWebsite.environment}</div>
+                      <div className="settings-key">Connection type</div>
+                      <div className="settings-value">{selectedWebsite.connection_type}</div>
+                      <div className="settings-key">Collector mode</div>
+                      <div className="settings-value">{selectedWebsite.collector?.mode || "agent"}</div>
+                    </div>
+                  </div>
+
+                  <div className="card">
+                    <div className="card-title" style={{marginBottom: 16}}>Collector identity</div>
+                    <div style={{background: 'var(--bg-canvas)', padding: 16, borderRadius: 12, border: '1px solid var(--border-color)', marginBottom: 16}}>
+                      <div style={{fontSize: 12, color: 'var(--color-gold)', fontWeight: 700, marginBottom: 8}}>INGEST TOKEN</div>
+                      <div style={tokenStyle}>{selectedWebsite.collector?.ingest_token || "Unavailable"}</div>
+                    </div>
+                    <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.7}}>
+                      Keep this token bound to the storefront or collector process that belongs to this workspace. Rotating tokens is not exposed yet, so treat it like an environment secret.
+                    </div>
+                  </div>
+
+                  <div className="card">
+                    <div className="card-title" style={{marginBottom: 16}}>Runtime endpoints</div>
+                    <div className="settings-grid">
+                      <div className="settings-key">Collector ingest</div>
+                      <div className="settings-value">{integration?.ingest_url || `${API_BASE}/collector/ingest`}</div>
+                      <div className="settings-key">MCP endpoint</div>
+                      <div className="settings-value">{integration?.protocols?.mcp_endpoint || `${API_BASE}/mcp`}</div>
+                      <div className="settings-key">Tool registry</div>
+                      <div className="settings-value">{integration?.protocols?.mcp_tools_url || `${API_BASE}/mcp/tools`}</div>
+                      <div className="settings-key">Observability</div>
+                      <div className="settings-value">{integration?.protocols?.observability_url || `${API_BASE}/websites/${selectedWebsiteId}/observability`}</div>
+                    </div>
                   </div>
                 </div>
               )}
