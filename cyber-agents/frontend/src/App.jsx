@@ -187,7 +187,7 @@ function App() {
   const [notesSaving, setNotesSaving] = useState(false);
   const [assigneeDraft, setAssigneeDraft] = useState("");
   const [assigning, setAssigning] = useState(false);
-  const [incidentDetailTab, setIncidentDetailTab] = useState("overview");
+  const [incidentDetailTab, setIncidentDetailTab] = useState("discussion");
 
   useEffect(() => {
     if (!token) {
@@ -426,7 +426,7 @@ function App() {
   }, [selectedIncident?.attack_id, selectedIncident?.assignee?.name]);
 
   useEffect(() => {
-    setIncidentDetailTab("overview");
+    setIncidentDetailTab("discussion");
   }, [selectedIncident?.attack_id]);
 
   const visibleAgentTrace = useMemo(() => {
@@ -560,6 +560,12 @@ function App() {
     });
     return items.slice(0, 5);
   }, [feed, websiteIncidents]);
+
+  const liveDiscussionFeed = useMemo(
+    () =>
+      feed.filter((entry) => entry.data?.agent_discussion_entry && (!selectedWebsiteId || entry.data.website_id === selectedWebsiteId)),
+    [feed, selectedWebsiteId]
+  );
 
   async function submitAuth(targetMode) {
     try {
@@ -1023,6 +1029,38 @@ function App() {
                       ))}
                       {!feed.filter(e => !selectedWebsiteId || e.data.website_id === selectedWebsiteId).length ? (
                         <div style={{fontSize: 13, color: 'var(--text-muted)'}}>Agent activity, approvals, and reporting steps will stream here live.</div>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="card" style={{marginBottom: 24}}>
+                    <div className="card-title" style={{marginBottom: 16}}>Live Agent Conversation</div>
+                    <div style={{display: 'flex', flexDirection: 'column', gap: 12, maxHeight: 320, overflowY: 'auto'}}>
+                      {liveDiscussionFeed.map((entry) => {
+                        const discussion = entry.data.agent_discussion_entry;
+                        return (
+                          <div key={entry.id} style={{padding: 14, background: 'rgba(139, 92, 246, 0.08)', borderRadius: 14, border: '1px solid var(--border-color)'}}>
+                            <div className="flex-between" style={{marginBottom: 8, gap: 12}}>
+                              <span style={{fontWeight: 700, fontSize: 13}}>
+                                {discussion.speaker}
+                                {discussion.audience ? (
+                                  <span style={{fontWeight: 500, color: 'var(--text-subtle)', marginLeft: 8}}>→ {discussion.audience}</span>
+                                ) : null}
+                              </span>
+                              <span style={{fontSize: 12, color: 'var(--text-subtle)', textTransform: 'capitalize'}}>
+                                {discussion.source === 'gemini' ? 'Gemini' : 'Fallback'}
+                              </span>
+                            </div>
+                            <div style={{fontSize: 14, color: 'var(--text-muted)', lineHeight: 1.7}}>
+                              {discussion.message}
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {!liveDiscussionFeed.length ? (
+                        <div style={{fontSize: 13, color: 'var(--text-muted)'}}>
+                          Start a new incident to watch the agents discuss it live stage by stage.
+                        </div>
                       ) : null}
                     </div>
                   </div>
@@ -1503,6 +1541,9 @@ function App() {
                                   </div>
                                   <div style={{fontSize: 14, color: 'var(--text-muted)', lineHeight: 1.7}}>
                                     {entry.message}
+                                  </div>
+                                  <div style={{fontSize: 12, color: 'var(--text-subtle)', marginTop: 8, textTransform: 'capitalize'}}>
+                                    {entry.source === 'gemini' ? 'Generated with Gemini' : 'Local fallback'}
                                   </div>
                                 </div>
                               ))}

@@ -152,6 +152,7 @@ def _record_discussion(
     stage: str,
     audience: str | None = None,
     kind: str = "statement",
+    source: str = "fallback",
 ):
     discussion = list(state.get("agent_discussion", []))
     discussion.append(
@@ -161,6 +162,7 @@ def _record_discussion(
             "message": message,
             "stage": stage,
             "kind": kind,
+            "source": source,
         }
     )
     state["agent_discussion"] = discussion
@@ -176,8 +178,8 @@ def _speak(
     fallback: str,
     kind: str = "statement",
 ):
-    message = _llm_text(system_prompt, context_prompt, fallback)
-    _record_discussion(state, speaker, message, stage, audience, kind)
+    message, used_llm = _llm_text(system_prompt, context_prompt, fallback)
+    _record_discussion(state, speaker, message, stage, audience, kind, "gemini" if used_llm else "fallback")
 
 
 def _mark_llm_usage(state: AgentState, agent: str, used: bool, runtime: str | None = None):
@@ -222,7 +224,7 @@ def _llm_json(system_prompt: str, task_prompt: str):
     return json.loads(_clean_json_payload(response))
 
 
-def _llm_text(system_prompt: str, task_prompt: str, fallback: str) -> str:
+def _llm_text(system_prompt: str, task_prompt: str, fallback: str) -> tuple[str, bool]:
     combined_prompt = f"""
 {system_prompt}
 
@@ -237,11 +239,11 @@ Rules:
 """.strip()
     response = call_gemini(combined_prompt).strip()
     if not response:
-        return fallback
+        return fallback, False
     cleaned = _clean_json_payload(response).strip().strip('"').strip("'")
     if not cleaned or cleaned.startswith("{") or "Gemini unavailable" in cleaned:
-        return fallback
-    return cleaned
+        return fallback, False
+    return cleaned, True
 
 
 def normalization(state: AgentState) -> AgentState:

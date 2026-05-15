@@ -280,16 +280,20 @@ async def _broadcast_trace(website_id: str, attack_id: str, state: dict):
         "action": "action_agent",
         "report": "reporting_agent",
     }
-    for entry in state.get("agent_trace", []):
+    discussion_entries = state.get("agent_discussion", [])
+    for index, entry in enumerate(state.get("agent_trace", [])):
         public_name = stage_to_protocol_agent.get(entry["stage"])
+        discussion_entry = discussion_entries[index] if index < len(discussion_entries) else None
         await broadcast(
             "agent_update",
             {
                 "attack_id": attack_id,
                 "website_id": website_id,
                 "current_stage": entry["stage"],
-                "message": entry["summary"],
+                "message": discussion_entry.get("message") if discussion_entry else entry["summary"],
                 "agent_trace_entry": entry,
+                "agent_discussion_entry": discussion_entry,
+                "agent_discussion": discussion_entries[: index + 1] if discussion_entry else discussion_entries,
                 "protocol_trace_entry": protocol_lookup.get(public_name),
                 "policy_decision": state.get("policy_decision"),
                 "runtime_metadata": state.get("runtime_metadata", {}),
