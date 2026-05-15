@@ -301,6 +301,32 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
     active_incidents[attack_id] = result
     _persist_incident(website["_id"], result)
     await broadcast(
+        "incident_snapshot",
+        {
+            "attack_id": attack_id,
+            "website_id": website["_id"],
+            "simulation": result.get("simulation"),
+            "telemetry": result.get("telemetry"),
+            "anomaly": result.get("anomaly"),
+            "correlation": result.get("correlation"),
+            "classification": result.get("classification"),
+            "investigation": result.get("investigation"),
+            "mitigation_plan": result.get("mitigation_plan"),
+            "policy_decision": result.get("policy_decision"),
+            "approval_status": result.get("approval_status"),
+            "action_result": result.get("action_result"),
+            "incident_report": result.get("incident_report"),
+            "agent_trace": result.get("agent_trace"),
+            "agent_messages": result.get("agent_messages"),
+            "protocol_trace": result.get("protocol_trace"),
+            "tool_trace": result.get("tool_trace"),
+            "runtime_metadata": result.get("runtime_metadata", {}),
+            "llm_usage": result.get("llm_usage"),
+            "current_stage": result.get("current_stage"),
+            "message": "Detection pipeline completed. Full incident context is available.",
+        },
+    )
+    await broadcast(
         "observability_update",
         {
             "website_id": website["_id"],
@@ -450,12 +476,20 @@ async def websocket_endpoint(websocket: WebSocket):
                 "incident_id": 1,
                 "current_stage": 1,
                 "simulation": 1,
+                "telemetry": 1,
+                "anomaly": 1,
+                "correlation": 1,
                 "classification": 1,
                 "investigation": 1,
+                "mitigation_plan": 1,
                 "policy_decision": 1,
                 "approval_status": 1,
                 "action_result": 1,
                 "incident_report": 1,
+                "agent_trace": 1,
+                "agent_messages": 1,
+                "protocol_trace": 1,
+                "tool_trace": 1,
                 "runtime_metadata": 1,
                 "llm_usage": 1,
                 "created_at": 1,
@@ -786,6 +820,10 @@ async def approve_incident(incident_id: str, body: ApprovalRequest, user=Depends
             "approval_status": body.decision,
             "current_stage": "action",
             "message": "Human approval received. Action Agent is applying the selected response path.",
+            "policy_decision": state.get("policy_decision"),
+            "agent_trace": state.get("agent_trace"),
+            "agent_messages": state.get("agent_messages"),
+            "protocol_trace": state.get("protocol_trace"),
             "tool_trace": state.get("tool_trace"),
             "runtime_metadata": state.get("runtime_metadata", {}),
         },
@@ -797,6 +835,41 @@ async def approve_incident(incident_id: str, body: ApprovalRequest, user=Depends
     final_state.setdefault("runtime_metadata", {})["stage2"] = get_stage2_runtime_summary()
     active_incidents[incident_id] = final_state
     _persist_incident(incident["website_id"], final_state)
+    await broadcast(
+        "incident_snapshot",
+        {
+            "attack_id": incident_id,
+            "website_id": incident["website_id"],
+            "simulation": final_state.get("simulation"),
+            "telemetry": final_state.get("telemetry"),
+            "anomaly": final_state.get("anomaly"),
+            "correlation": final_state.get("correlation"),
+            "classification": final_state.get("classification"),
+            "investigation": final_state.get("investigation"),
+            "mitigation_plan": final_state.get("mitigation_plan"),
+            "policy_decision": final_state.get("policy_decision"),
+            "approval_status": final_state.get("approval_status"),
+            "action_result": final_state.get("action_result"),
+            "incident_report": final_state.get("incident_report"),
+            "agent_trace": final_state.get("agent_trace"),
+            "agent_messages": final_state.get("agent_messages"),
+            "protocol_trace": final_state.get("protocol_trace"),
+            "tool_trace": final_state.get("tool_trace"),
+            "runtime_metadata": final_state.get("runtime_metadata", {}),
+            "llm_usage": final_state.get("llm_usage"),
+            "current_stage": final_state.get("current_stage"),
+            "message": "Human decision applied. The full resolved incident state is now available.",
+        },
+    )
+    await broadcast(
+        "observability_update",
+        {
+            "website_id": incident["website_id"],
+            "attack_id": incident_id,
+            "observability": _observability_snapshot(incident["website_id"]),
+            "message": f"Approval flow completed with decision: {body.decision}.",
+        },
+    )
 
     await broadcast(
         "incident_resolved",

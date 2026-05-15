@@ -95,6 +95,7 @@ class OpenTelemetryRuntime:
         self._lock = Lock()
         self._spans = defaultdict(lambda: deque(maxlen=80))
         self._alerts = defaultdict(lambda: deque(maxlen=20))
+        self._events = defaultdict(lambda: deque(maxlen=40))
         self._metrics = defaultdict(_default_metrics)
         self._latest_tool = defaultdict(dict)
         if self.enabled:
@@ -166,6 +167,17 @@ class OpenTelemetryRuntime:
                 elif event_type == "network":
                     channels["network_logs"] += 1
             self._latest_tool[website_id]["last_ingest_channels"] = channels
+            self._events[website_id].appendleft(
+                {
+                    "timestamp": _utc_now_iso(),
+                    "kind": "collector_ingest",
+                    "title": "Collector ingest received",
+                    "detail": f"{len(events)} event(s) arrived from {source_label or 'customer website'} across {', '.join(sorted({event.get('event_type', 'unknown') for event in events}))}.",
+                    "severity": "info",
+                    "counts": channels,
+                    "run_detection": run_detection,
+                }
+            )
 
     def trace_tool_execution(self, tool_name: str, owner_agent: str, state: dict, handler):
         website_id = self._website_id_from_state(state)
@@ -213,6 +225,20 @@ class OpenTelemetryRuntime:
             if tool_name == "telemetry.detect_threats":
                 metrics["detection_runs"] += 1
                 metrics["last_detection_at"] = _utc_now_iso()
+            self._events[website_id].appendleft(
+                {
+                    "timestamp": _utc_now_iso(),
+                    "kind": "agent_tool",
+                    "title": f"{owner_agent} executed {tool_name}",
+                    "detail": f"Stage moved from {state_before.get('current_stage') or 'collector_ingested'} to {state_after.get('current_stage') or 'unknown'} in {duration_ms} ms.",
+                    "severity": "info",
+                    "tool": tool_name,
+                    "agent": owner_agent,
+                    "attack_id": attack_id,
+                    "input_summary": _summarize_state(state_before),
+                    "output_summary": _summarize_state(state_after),
+                }
+            )
             if detected and tool_name == "telemetry.detect_threats":
                 metrics["incidents_detected"] += 1
                 metrics["last_alert_at"] = _utc_now_iso()
@@ -226,6 +252,18 @@ class OpenTelemetryRuntime:
                     "severity": (classification.get("attack") or {}).get("severity") or "MEDIUM",
                 }
                 self._alerts[website_id].appendleft(alert)
+                self._events[website_id].appendleft(
+                    {
+                        "timestamp": alert["timestamp"],
+                        "kind": "detection_alert",
+                        "title": "Detection Agent raised an alert",
+                        "detail": alert["message"],
+                        "severity": alert["severity"].lower(),
+                        "tool": tool_name,
+                        "agent": owner_agent,
+                        "attack_id": attack_id,
+                    }
+                )
             self._latest_tool[website_id] = {
                 "tool_name": tool_name,
                 "owner_agent": owner_agent,
@@ -240,6 +278,7 @@ class OpenTelemetryRuntime:
             metrics = deepcopy(self._metrics[website_id])
             spans = list(self._spans[website_id])
             alerts = list(self._alerts[website_id])
+            events = list(self._events[website_id])
             latest_tool = deepcopy(self._latest_tool[website_id])
             last_ingest_channels = latest_tool.pop("last_ingest_channels", _default_channels())
         return {
@@ -266,6 +305,7 @@ class OpenTelemetryRuntime:
             "latest_tool": latest_tool,
             "recent_spans": spans[:12],
             "recent_alerts": alerts[:8],
+            "recent_events": events[:12],
         }
 
 

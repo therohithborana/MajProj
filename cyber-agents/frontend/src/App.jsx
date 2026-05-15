@@ -166,6 +166,7 @@ function App() {
   const [connected, setConnected] = useState(false);
   const [autoRunning, setAutoRunning] = useState(false);
   const [decisionLoading, setDecisionLoading] = useState({});
+  const [copyFeedback, setCopyFeedback] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const reconnectRef = useRef(null);
@@ -276,10 +277,16 @@ function App() {
                 investigation: payload.data.investigation || existing.investigation,
                 mitigation_plan: payload.data.mitigation_plan || existing.mitigation_plan,
                 policy_decision: payload.data.policy_decision || existing.policy_decision,
+                approval_status: payload.data.approval_status || existing.approval_status,
                 action_result: payload.data.action_result || existing.action_result,
                 incident_report: payload.data.incident_report || existing.incident_report,
                 agent_trace: payload.data.agent_trace || existing.agent_trace,
+                agent_messages: payload.data.agent_messages || existing.agent_messages,
+                protocol_trace: payload.data.protocol_trace || existing.protocol_trace,
                 tool_trace: payload.data.tool_trace || existing.tool_trace,
+                runtime_metadata: payload.data.runtime_metadata || existing.runtime_metadata,
+                llm_usage: payload.data.llm_usage || existing.llm_usage,
+                current_stage: payload.data.current_stage || existing.current_stage,
               },
             };
           });
@@ -369,6 +376,50 @@ function App() {
   );
   const selectedIncident =
     websiteIncidents.find((incident) => incident.attack_id === selectedIncidentId) || websiteIncidents[0] || null;
+
+  const visibleAgentTrace = useMemo(() => {
+    if (!selectedIncident) {
+      return [];
+    }
+    if ((selectedIncident.agent_trace || []).length) {
+      return selectedIncident.agent_trace;
+    }
+    return (selectedIncident.tool_trace || []).map((entry) => ({
+      agent: entry.llm_agent || entry.agent,
+      stage: entry.output_summary?.current_stage || entry.tool,
+      summary: entry.llm_used
+        ? `${entry.llm_agent || entry.agent} used ${entry.tool} with Gemini-backed reasoning.`
+        : `${entry.agent} executed ${entry.tool} through the MCP tool runtime.`,
+      details: {
+        tool: entry.tool,
+        llm_runtime: entry.llm_runtime,
+      },
+    }));
+  }, [selectedIncident]);
+
+  const visibleAgentMessages = useMemo(() => {
+    if (!selectedIncident) {
+      return [];
+    }
+    if ((selectedIncident.agent_messages || []).length) {
+      return selectedIncident.agent_messages;
+    }
+    return (selectedIncident.tool_trace || []).map((entry, index, items) => {
+      const next = items[index + 1];
+      return {
+        from: entry.llm_agent || entry.agent,
+        to: next ? next.llm_agent || next.agent : "Dashboard",
+        subject: entry.prompt_profile?.purpose || "Agent handoff",
+        content: entry.llm_used
+          ? `${entry.llm_agent || entry.agent} completed a Gemini-backed reasoning step and passed the updated incident state forward.`
+          : `${entry.agent} finished ${entry.tool} and passed the structured result to the next stage.`,
+        artifacts: {
+          tool: entry.tool,
+          current_stage: entry.output_summary?.current_stage,
+        },
+      };
+    });
+  }, [selectedIncident]);
 
   const stats = useMemo(
     () => ({
@@ -487,6 +538,21 @@ function App() {
       setError(err.message);
     } finally {
       setDecisionLoading((current) => ({ ...current, [selectedIncident.attack_id]: false }));
+    }
+  }
+
+  async function copyCollectorToken() {
+    const tokenToCopy = selectedWebsite?.collector?.ingest_token;
+    if (!tokenToCopy) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(tokenToCopy);
+      setCopyFeedback("Copied");
+      window.setTimeout(() => setCopyFeedback(""), 1800);
+    } catch (_error) {
+      setCopyFeedback("Copy failed");
+      window.setTimeout(() => setCopyFeedback(""), 1800);
     }
   }
 
@@ -883,18 +949,25 @@ function App() {
                         </div>
                       </div>
                       <div style={{display: 'grid', gap: 12}}>
-                        {(observability.recent_spans || []).slice(0, 6).map((span, index) => (
-                          <div key={`${span.name}-${index}`} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                        {(observability.recent_events || []).slice(0, 6).map((event, index) => (
+                          <div key={`${event.timestamp}-${index}`} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
                             <div className="flex-between" style={{marginBottom: 6}}>
-                              <span style={{fontWeight: 600, fontSize: 13}}>{span.name}</span>
-                              <span style={{fontSize: 12, color: 'var(--text-subtle)'}}>{span.duration_ms} ms</span>
+                              <span style={{fontWeight: 600, fontSize: 13}}>{event.title}</span>
+                              <span style={{fontSize: 12, color: 'var(--text-subtle)'}}>{new Date(event.timestamp).toLocaleTimeString()}</span>
                             </div>
-                            <div style={{fontSize: 12, color: 'var(--text-muted)'}}>
-                              Agent: {span.attributes?.["cyberagent.owner_agent"] || "Collector"} • Stage: {span.attributes?.["cyberagent.stage_after"] || span.attributes?.["cyberagent.channels"] || "ingest"}
+                            <div style={{fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6}}>
+                              {event.detail}
                             </div>
+                            {event.agent || event.tool ? (
+                              <div style={{fontSize: 12, color: 'var(--text-subtle)', marginTop: 6}}>
+                                {event.agent ? `Agent: ${event.agent}` : ""}
+                                {event.agent && event.tool ? " • " : ""}
+                                {event.tool ? `Tool: ${event.tool}` : ""}
+                              </div>
+                            ) : null}
                           </div>
                         ))}
-                        {!observability.recent_spans?.length ? (
+                        {!observability.recent_events?.length ? (
                           <div style={{color: 'var(--text-muted)', fontSize: 13}}>OpenTelemetry spans will appear here as soon as the collector or agents run.</div>
                         ) : null}
                       </div>
@@ -930,117 +1003,58 @@ function App() {
                     <div className="grid-layout">
                       <div>
                         <div style={{marginBottom: 16, color: 'var(--text-muted)'}}>
-                          Customer-side collector posts batched events to <code>POST /collector/ingest</code> with <code>X-Collector-Token</code>.
+                          Use this project token in the dummy storefront so browsing, login activity, and suspicious behavior map into the correct protected application.
                         </div>
                         <div style={{background: 'var(--bg-canvas)', padding: 16, borderRadius: 8, border: '1px solid var(--border-color)', marginBottom: 16}}>
-                          <div style={{fontSize: 12, color: 'var(--color-gold)', marginBottom: 8, fontWeight: 'bold'}}>COLLECTOR TOKEN</div>
+                          <div className="flex-between" style={{gap: 12, marginBottom: 8}}>
+                            <div style={{fontSize: 12, color: 'var(--color-gold)', fontWeight: 'bold'}}>COLLECTOR TOKEN</div>
+                            <button className="btn btn-secondary" style={{padding: '8px 12px'}} onClick={copyCollectorToken}>
+                              {copyFeedback || "Copy token"}
+                            </button>
+                          </div>
                           <div style={tokenStyle}>{selectedWebsite.collector?.ingest_token || "Unavailable"}</div>
                         </div>
-                      </div>
-                      <div style={codePanelStyle}>
-                        <div style={eyebrowStyle}>Collector Request Example</div>
-                        <pre style={codeBlockStyle}>{`POST ${integration?.ingest_url || API_BASE + '/collector/ingest'}
-Header: ${integration?.token_header || "X-Collector-Token"}: ${selectedWebsite.collector?.ingest_token || ""}
-Body: {
-  "source_label": "${selectedWebsite.name} web collector",
-  "run_detection": true,
-  "events": [...]
-}`}</pre>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="card" style={{marginBottom: 24}}>
-                    <div className="card-title" style={{marginBottom: 16}}>Agent Protocol Surface</div>
-                    <div className="grid-layout">
-                      <div style={integrationPanelStyle}>
-                        <div style={eyebrowStyle}>MCP Discovery</div>
                         <div style={{display: 'grid', gap: 12}}>
-                          <div>
-                            <div style={{fontSize: 12, color: 'var(--text-subtle)', marginBottom: 4}}>MCP Endpoint</div>
-                            <div style={tokenStyle}>{integration?.protocols?.mcp_endpoint || `${API_BASE}/mcp`}</div>
-                          </div>
-                          <div>
-                            <div style={{fontSize: 12, color: 'var(--text-subtle)', marginBottom: 4}}>Tool Registry</div>
-                            <div style={tokenStyle}>{integration?.protocols?.mcp_tools_url || `${API_BASE}/mcp/tools`}</div>
-                          </div>
-                          <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6}}>
-                            The platform now uses an MCP-style tool registry as its primary runtime. Multi-agent execution is performed
-                            by specialist agents that explicitly call telemetry, analysis, and response tools.
-                          </div>
-                          <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6}}>
-                            Active runtime: {integration?.protocols?.primary_runtime || 'mcp_tools'}.
-                          </div>
-                        </div>
-                      </div>
-                      <div style={codePanelStyle}>
-                        <div style={eyebrowStyle}>MCP Tool Call Example</div>
-                        <pre style={codeBlockStyle}>{`POST ${integration?.protocols?.mcp_endpoint || `${API_BASE}/mcp`}
-Body: {
-  "jsonrpc": "2.0",
-  "id": 1,
-  "method": "tools/call",
-  "params": {
-    "name": "analysis.classify_threat",
-    "arguments": {
-      "state": { ... }
-    }
-  }
-}
-`}</pre>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="card" style={{marginBottom: 24}}>
-                    <div className="card-title" style={{marginBottom: 16}}>OpenTelemetry Observability</div>
-                    <div className="grid-layout">
-                      <div style={integrationPanelStyle}>
-                        <div style={eyebrowStyle}>Runtime</div>
-                        <div style={{display: 'grid', gap: 12}}>
-                          <div>
-                            <div style={{fontSize: 12, color: 'var(--text-subtle)', marginBottom: 4}}>Observability Endpoint</div>
-                            <div style={tokenStyle}>{integration?.protocols?.observability_url || `${API_BASE}/websites/${selectedWebsiteId}/observability`}</div>
-                          </div>
-                          <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6}}>
-                            OpenTelemetry is now recording collector ingests and every MCP tool stage. That means the dashboard can show
-                            live application logs, authentication logs, network logs, and the exact detection-agent chain after suspicious activity.
-                          </div>
-                          <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6}}>
-                            Collection mode: {integration?.protocols?.opentelemetry?.collection_mode || 'custom_security_events_plus_opentelemetry'}.
-                          </div>
-                        </div>
-                      </div>
-                      <div style={codePanelStyle}>
-                        <div style={eyebrowStyle}>Recent OTel Snapshot</div>
-                        <pre style={codeBlockStyle}>{JSON.stringify({
-                          enabled: observability.enabled,
-                          failed_auth_events: observability.metrics?.failed_auth_events || 0,
-                          tool_executions: observability.metrics?.tool_executions || 0,
-                          latest_tool: observability.latest_tool?.tool_name || null,
-                          recent_span: observability.recent_spans?.[0]?.name || null,
-                        }, null, 2)}</pre>
-                      </div>
-                    </div>
-                  </div>
-
-                  {integration?.protocols?.stage2?.a2a_agents?.length ? (
-                    <div className="card" style={{marginBottom: 24}}>
-                      <div className="card-title" style={{marginBottom: 16}}>Optional ADK Agents</div>
-                      <div style={{display: 'grid', gap: 12}}>
-                        {integration.protocols.stage2.a2a_agents.map((agent) => (
-                          <div key={agent.name} style={traceCardStyle}>
-                            <div className="flex-between" style={{marginBottom: 8}}>
-                              <span style={{fontWeight: 600, fontSize: 13}}>{agent.name}</span>
-                              <span style={{fontSize: 12, color: 'var(--color-gold)'}}>Optional</span>
+                          <div style={{padding: 14, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div style={{fontSize: 12, color: 'var(--text-subtle)', marginBottom: 6}}>How to use it</div>
+                            <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.7}}>
+                              Paste this token into NovaCart on <code>localhost:3001</code>. The storefront will begin syncing healthy application activity every few seconds and will send attack scenarios when you simulate failed logins, recon, or traffic spikes.
                             </div>
-                            <div style={{fontSize: 13, color: 'var(--text-muted)', marginBottom: 8}}>{agent.description}</div>
-                            <div style={tokenStyle}>{agent.agent_card_url || agent.base_url}</div>
                           </div>
-                        ))}
+                          <div style={{padding: 14, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div style={{fontSize: 12, color: 'var(--text-subtle)', marginBottom: 6}}>Connection status</div>
+                            <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.7}}>
+                              Recent activity should appear below as normalized application, authentication, and network events. Malicious behavior will also trigger the incident workflow in the threat-detection tab.
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="card" style={{background: 'var(--bg-canvas)', border: '1px solid var(--border-color)'}}>
+                        <div className="card-title" style={{marginBottom: 16}}>OpenTelemetry Monitor</div>
+                        <div className="grid-metrics" style={{gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12, marginBottom: 16}}>
+                          <div style={{background: 'rgba(255,255,255,0.03)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>APPLICATION LOGS</div>
+                            <div style={{fontWeight: 700, fontSize: 18}}>{observability.channels?.application_logs?.events_seen || 0}</div>
+                          </div>
+                          <div style={{background: 'rgba(255,255,255,0.03)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>AUTHENTICATION LOGS</div>
+                            <div style={{fontWeight: 700, fontSize: 18}}>{observability.channels?.authentication_logs?.events_seen || 0}</div>
+                          </div>
+                          <div style={{background: 'rgba(255,255,255,0.03)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>NETWORK LOGS</div>
+                            <div style={{fontWeight: 700, fontSize: 18}}>{observability.channels?.network_logs?.events_seen || 0}</div>
+                          </div>
+                          <div style={{background: 'rgba(255,255,255,0.03)', padding: 12, borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                            <div style={{fontSize: 11, color: 'var(--text-subtle)', marginBottom: 4}}>FAILED LOGIN SIGNALS</div>
+                            <div style={{fontWeight: 700, fontSize: 18}}>{observability.metrics?.failed_auth_events || 0}</div>
+                          </div>
+                        </div>
+                        <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.7}}>
+                          The monitoring layer is capturing live application, authentication, and network activity from the storefront. When failed logins or suspicious scans start, those same signals feed the detection chain.
+                        </div>
                       </div>
                     </div>
-                  ) : null}
+                  </div>
                   
                   <div className="card">
                     <div className="card-title" style={{marginBottom: 16}}>Normalized Event Streams</div>
@@ -1138,16 +1152,52 @@ Body: {
 
                         <div className="card-title" style={{marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>AGENT TRACE</div>
                         <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
-                          {(selectedIncident.agent_trace || []).map((entry, idx) => (
+                          {visibleAgentTrace.map((entry, idx) => (
                             <div key={idx} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
                               <div className="flex-between" style={{marginBottom: 6}}>
                                 <span style={{fontWeight: 600, fontSize: 13}}>{entry.agent}</span>
                                 <span style={{fontSize: 12, color: 'var(--text-subtle)'}}>{entry.stage}</span>
                               </div>
                               <div style={{fontSize: 13, color: 'var(--text-muted)'}}>{entry.summary}</div>
+                              {entry.details?.tool || entry.details?.llm_runtime ? (
+                                <div style={{fontSize: 12, color: 'var(--text-subtle)', marginTop: 6}}>
+                                  {entry.details?.tool ? `Tool: ${entry.details.tool}` : ""}
+                                  {entry.details?.tool && entry.details?.llm_runtime ? " • " : ""}
+                                  {entry.details?.llm_runtime ? `Runtime: ${entry.details.llm_runtime}` : ""}
+                                </div>
+                              ) : null}
                             </div>
                           ))}
+                          {!visibleAgentTrace.length ? (
+                            <div style={{fontSize: 13, color: 'var(--text-muted)'}}>
+                              Agent trace will appear here once the multi-agent coordinator publishes the incident workflow.
+                            </div>
+                          ) : null}
                         </div>
+
+                        {visibleAgentMessages.length ? (
+                          <>
+                            <div className="card-title" style={{marginTop: 24, marginBottom: 12, fontSize: 14, color: 'var(--color-gold)'}}>AGENT HANDOFFS</div>
+                            <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
+                              {visibleAgentMessages.map((entry, idx) => (
+                                <div key={idx} style={{padding: 12, background: 'var(--bg-canvas)', borderRadius: 8, border: '1px solid var(--border-color)'}}>
+                                  <div className="flex-between" style={{marginBottom: 6}}>
+                                    <span style={{fontWeight: 600, fontSize: 13}}>{entry.from} → {entry.to}</span>
+                                    <span style={{fontSize: 12, color: 'var(--text-subtle)'}}>{entry.subject}</span>
+                                  </div>
+                                  <div style={{fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6}}>{entry.content}</div>
+                                  {entry.artifacts?.tool || entry.artifacts?.current_stage ? (
+                                    <div style={{fontSize: 12, color: 'var(--text-subtle)', marginTop: 6}}>
+                                      {entry.artifacts?.tool ? `Tool: ${entry.artifacts.tool}` : ""}
+                                      {entry.artifacts?.tool && entry.artifacts?.current_stage ? " • " : ""}
+                                      {entry.artifacts?.current_stage ? `Stage: ${entry.artifacts.current_stage}` : ""}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              ))}
+                            </div>
+                          </>
+                        ) : null}
 
                         {(selectedIncident.protocol_trace || []).length ? (
                           <>
@@ -1184,6 +1234,16 @@ Body: {
                                   <div style={{fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6}}>
                                     Output stage: {entry.output_summary?.current_stage || 'n/a'} • Approval: {entry.output_summary?.approval_status || 'n/a'}
                                   </div>
+                                  {entry.llm_agent ? (
+                                    <div style={{fontSize: 12, color: 'var(--text-subtle)', marginTop: 6}}>
+                                      {entry.llm_agent} {entry.llm_used ? `used ${entry.llm_runtime || 'Gemini'}` : 'fell back to heuristic logic'}.
+                                    </div>
+                                  ) : null}
+                                  {entry.prompt_profile?.purpose ? (
+                                    <div style={{fontSize: 12, color: 'var(--text-subtle)', marginTop: 6}}>
+                                      Purpose: {entry.prompt_profile.purpose}
+                                    </div>
+                                  ) : null}
                                 </div>
                               ))}
                             </div>

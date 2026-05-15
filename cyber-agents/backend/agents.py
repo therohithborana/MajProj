@@ -113,7 +113,8 @@ def _record_message(
 
 
 def _mark_llm_usage(state: AgentState, agent: str, used: bool, runtime: str | None = None):
-    usage = dict(state.get("llm_usage", {}))
+    existing = state.get("llm_usage") or {}
+    usage = dict(existing)
     usage[agent] = {"used": used}
     if runtime:
         usage[agent]["runtime"] = runtime
@@ -506,16 +507,23 @@ Rules:
 
     try:
         parsed = _llm_json(CLASSIFIER_SYSTEM_PROMPT, classifier_prompt)
-        llm_class = parsed["predicted_class"]
-        llm_scores = _normalize_scores(parsed.get("confidence_scores", {}), llm_class)
-        llm_conf = round(float(parsed["confidence"]), 4)
-        predicted_class = llm_class if llm_class in CLASS_LABELS else predicted_class
-        confidence_scores = llm_scores
-        confidence = min(max(llm_conf, 0.0), 1.0)
-        severity = parsed.get("severity", severity)
-        confidence_source = "llm_reviewed"
-        reasoning = parsed.get("reasoning", reasoning)
-        _mark_llm_usage(state, "Threat Classification Agent", True, "direct_gemini")
+        if isinstance(parsed, dict):
+            llm_class = parsed.get("predicted_class")
+            raw_confidence = parsed.get("confidence")
+            if llm_class in CLASS_LABELS and raw_confidence is not None:
+                llm_scores = _normalize_scores(parsed.get("confidence_scores", {}), llm_class)
+                llm_conf = round(float(raw_confidence), 4)
+                predicted_class = llm_class
+                confidence_scores = llm_scores
+                confidence = min(max(llm_conf, 0.0), 1.0)
+                severity = parsed.get("severity", severity)
+                confidence_source = "llm_reviewed"
+                reasoning = parsed.get("reasoning", reasoning)
+                _mark_llm_usage(state, "Threat Classification Agent", True, "direct_gemini")
+            else:
+                _mark_llm_usage(state, "Threat Classification Agent", False)
+        else:
+            _mark_llm_usage(state, "Threat Classification Agent", False)
     except Exception:
         _mark_llm_usage(state, "Threat Classification Agent", False)
 

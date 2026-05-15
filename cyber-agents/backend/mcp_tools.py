@@ -4,6 +4,11 @@ from dataclasses import dataclass
 from typing import Callable
 
 from agents import (
+    CLASSIFIER_SYSTEM_PROMPT,
+    INVESTIGATOR_SYSTEM_PROMPT,
+    POLICY_SYSTEM_PROMPT,
+    REPORT_SYSTEM_PROMPT,
+    RESPONSE_SYSTEM_PROMPT,
     action,
     correlation,
     detection,
@@ -115,6 +120,42 @@ TOOLS = [
 
 TOOLS_BY_NAME = {tool.name: tool for tool in TOOLS}
 
+LLM_AGENT_BY_TOOL = {
+    "analysis.classify_threat": "Threat Classification Agent",
+    "analysis.investigate_incident": "Investigation Agent",
+    "response.plan_mitigation": "Response Planning Agent",
+    "response.review_policy": "Policy Agent",
+    "response.generate_report": "Reporting Agent",
+}
+
+TOOL_PROMPT_PROFILE = {
+    "analysis.classify_threat": {
+        "agent": "Threat Classification Agent",
+        "system_prompt": CLASSIFIER_SYSTEM_PROMPT,
+        "purpose": "Classify the suspicious activity conservatively from correlated evidence.",
+    },
+    "analysis.investigate_incident": {
+        "agent": "Investigation Agent",
+        "system_prompt": INVESTIGATOR_SYSTEM_PROMPT,
+        "purpose": "Build an analyst-ready incident brief, timeline, and attacker profile.",
+    },
+    "response.plan_mitigation": {
+        "agent": "Response Planning Agent",
+        "system_prompt": RESPONSE_SYSTEM_PROMPT,
+        "purpose": "Draft safe Linux containment and remediation steps.",
+    },
+    "response.review_policy": {
+        "agent": "Policy Agent",
+        "system_prompt": POLICY_SYSTEM_PROMPT,
+        "purpose": "Decide whether response should be autonomous, approved, or escalated.",
+    },
+    "response.generate_report": {
+        "agent": "Reporting Agent",
+        "system_prompt": REPORT_SYSTEM_PROMPT,
+        "purpose": "Write a concise professional incident report for analysts.",
+    },
+}
+
 DETECTION_PLAN = [
     "telemetry.normalize_events",
     "telemetry.detect_threats",
@@ -164,6 +205,8 @@ class McpToolRuntime:
                 "description": tool.description,
                 "inputSchema": tool.input_schema,
                 "outputSchema": tool.output_schema,
+                "ownerAgent": tool.owner_agent,
+                "promptProfile": TOOL_PROMPT_PROFILE.get(tool.name, {}),
             }
             for tool in TOOLS
         ]
@@ -180,6 +223,7 @@ class McpToolRuntime:
             "structuredContent": {
                 "state": serialize_document(next_state),
                 "summary": summary,
+                "promptProfile": TOOL_PROMPT_PROFILE.get(name, {}),
             },
             "isError": False,
         }
@@ -196,12 +240,18 @@ class McpMultiAgentCoordinator:
             before = deepcopy(current)
             result = self.runtime.call_tool(tool_name, {"state": current})
             current = result["structuredContent"]["state"]
+            llm_agent = LLM_AGENT_BY_TOOL.get(tool_name)
+            llm_usage = (current.get("llm_usage") or {}).get(llm_agent, {}) if llm_agent else {}
             current["tool_trace"] = tool_trace + [
                 {
                     "tool": tool_name,
                     "agent": TOOLS_BY_NAME[tool_name].owner_agent,
                     "input_summary": _state_summary(before),
                     "output_summary": result["structuredContent"]["summary"],
+                    "llm_agent": llm_agent,
+                    "llm_used": bool(llm_usage.get("used")) if llm_agent else False,
+                    "llm_runtime": llm_usage.get("runtime") if llm_agent else None,
+                    "prompt_profile": TOOL_PROMPT_PROFILE.get(tool_name, {}),
                 }
             ]
             tool_trace = list(current["tool_trace"])
@@ -215,12 +265,18 @@ class McpMultiAgentCoordinator:
             before = deepcopy(current)
             result = self.runtime.call_tool(tool_name, {"state": current})
             current = result["structuredContent"]["state"]
+            llm_agent = LLM_AGENT_BY_TOOL.get(tool_name)
+            llm_usage = (current.get("llm_usage") or {}).get(llm_agent, {}) if llm_agent else {}
             current["tool_trace"] = tool_trace + [
                 {
                     "tool": tool_name,
                     "agent": TOOLS_BY_NAME[tool_name].owner_agent,
                     "input_summary": _state_summary(before),
                     "output_summary": result["structuredContent"]["summary"],
+                    "llm_agent": llm_agent,
+                    "llm_used": bool(llm_usage.get("used")) if llm_agent else False,
+                    "llm_runtime": llm_usage.get("runtime") if llm_agent else None,
+                    "prompt_profile": TOOL_PROMPT_PROFILE.get(tool_name, {}),
                 }
             ]
             tool_trace = list(current["tool_trace"])
@@ -232,5 +288,5 @@ class McpMultiAgentCoordinator:
             "active_runtime": "mcp_tools",
             "mcp_endpoint": "http://localhost:8000/mcp",
             "tool_count": len(TOOLS),
-            "multiagent_mode": "tool_orchestrated",
+            "multiagent_mode": "agents_over_mcp_tools",
         }
