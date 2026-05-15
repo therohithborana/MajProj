@@ -37,13 +37,6 @@ You must behave like a careful security analyst, not a marketing assistant.
 Prefer conservative classifications, explicitly cite signals, and return strict JSON only.
 """.strip()
 
-INVESTIGATOR_SYSTEM_PROMPT = """
-You are the Investigation Agent in an AI cybersecurity platform.
-Your role is to transform classification output and evidence into an analyst-ready incident brief.
-Focus on attacker behavior, affected assets, timeline, hypotheses, and next analyst actions.
-Return strict JSON only.
-""".strip()
-
 POLICY_SYSTEM_PROMPT = """
 You are the Policy Agent in an AI cybersecurity platform.
 Your role is to decide whether a proposed response should be auto-executed, require human approval, or be manually escalated.
@@ -783,14 +776,6 @@ Rules:
         f"Classified the incident as {predicted_class} with {round(confidence * 100, 1)}% confidence ({confidence_source}).",
         state["classification"]["classification_brief"],
     )
-    _record_message(
-        state,
-        "Threat Classification Agent",
-        "Investigation Agent",
-        "Classification verdict",
-        "The correlated evidence has been classified and is ready for analyst-style investigation.",
-        state["classification"]["classification_brief"],
-    )
     _speak(
         state,
         "Threat Classification Agent",
@@ -899,9 +884,9 @@ Rules:
     _record_message(
         state,
         "Challenge Agent",
-        "Investigation Agent",
+        "Response Planning Agent",
         "Classifier challenge review",
-        "Primary classification has been challenged or supported and is ready for investigation.",
+        "Primary classification has been challenged or supported and is ready for mitigation planning.",
         state["challenge_review"],
     )
     if fallback["challenge_outcome"] == "challenge":
@@ -916,120 +901,30 @@ Rules:
         state,
         "Challenge Agent",
         "challenge_review",
-        "Investigation Agent",
+        "Response Planning Agent",
         CHALLENGE_SYSTEM_PROMPT,
         f"""
-Speak to the Investigation Agent after reviewing the primary classification.
+Speak to the Response Planning Agent after reviewing the primary classification.
 - Primary class: {classification["predicted_class"]}
 - Challenge outcome: {fallback["challenge_outcome"]}
 - Alternative class: {fallback["alternative_class"]}
 - False-positive risk: {fallback["false_positive_risk"]}
 - Notes: {fallback["notes"]}
-- Goal: tell the Investigation Agent how much to trust the primary verdict
+- Goal: tell the Response Planning Agent how much to trust the primary verdict
 """.strip(),
-        f"{challenge_message} Investigation Agent, continue with this review context.",
+        f"{challenge_message} Response Planning Agent, use this review context while preparing containment options.",
         "reply",
     )
     return state
 
 
-def investigation(state: AgentState) -> AgentState:
-    classification = state["classification"]
-    anomaly = state["anomaly"]
-    correlation_data = state["correlation"]
-    attack = classification["attack"]
-    challenge_data = state.get("challenge_review") or {}
+def _ensure_investigation_context(state: AgentState) -> dict:
+    investigation_data = state.get("investigation")
+    if investigation_data:
+        return investigation_data
     fallback = _fallback_investigation(state)
-
-    investigator_prompt = f"""
-Investigation request:
-- Attack type: {classification["predicted_class"]}
-- Severity: {attack["severity"]}
-- Confidence: {classification["confidence"]}
-- Confidence source: {classification["confidence_source"]}
-- Risk score: {classification["risk_score"]}
-- Challenge review: {challenge_data}
-- Detection summary: {anomaly["summary"]}
-- Correlation brief: {correlation_data["correlation_brief"]}
-- Evidence timeline: {correlation_data["timeline"]}
-- Evidence window: {correlation_data["evidence_window"]}
-
-Return a JSON object with exactly this structure:
-{{
-  "summary": "one concise paragraph",
-  "affected_assets": ["asset 1"],
-  "attacker_profile": {{
-    "primary_src_ip": "ip",
-    "src_ip_count": 1,
-    "behavior": "behavior summary"
-  }},
-  "timeline": [{{"timestamp": "...", "event_type": "...", "summary": "..."}}],
-  "evidence": [{{"event_type": "...", "message": "..."}}],
-  "hypotheses": ["hypothesis 1", "hypothesis 2"],
-  "recommended_owner": "role or team",
-  "urgency": "LOW/HIGH/MEDIUM/CRITICAL"
-}}
-
-Rules:
-- keep timeline grounded in supplied evidence
-- do not invent malware names
-- return JSON only
-""".strip()
-
-    try:
-        parsed = _llm_json(INVESTIGATOR_SYSTEM_PROMPT, investigator_prompt)
-        state["investigation"] = {
-            **fallback,
-            **parsed,
-            "timeline": parsed.get("timeline") or fallback["timeline"],
-            "evidence": parsed.get("evidence") or fallback["evidence"],
-        }
-        _mark_llm_usage(state, "Investigation Agent", True, "direct_gemini")
-    except Exception:
-        state["investigation"] = fallback
-        _mark_llm_usage(state, "Investigation Agent", False)
-
-    state["current_stage"] = "investigation"
-    _trace(
-        state,
-        "Investigation Agent",
-        "investigation",
-        "Compiled an analyst-style incident brief with evidence, timeline, and attacker profile.",
-        {
-            "affected_assets": state["investigation"]["affected_assets"],
-            "hypotheses": state["investigation"].get("hypotheses", [])[:2],
-        },
-    )
-    _record_message(
-        state,
-        "Investigation Agent",
-        "Response Planning Agent",
-        "Investigation brief",
-        "Investigation has produced a contextual brief for mitigation planning.",
-        {
-            "summary": state["investigation"]["summary"],
-            "affected_assets": state["investigation"]["affected_assets"],
-            "urgency": state["investigation"].get("urgency"),
-        },
-    )
-    _speak(
-        state,
-        "Investigation Agent",
-        "investigation",
-        "Response Planning Agent",
-        INVESTIGATOR_SYSTEM_PROMPT,
-        f"""
-Speak to the Response Planning Agent after building the incident brief.
-- Summary: {state["investigation"]["summary"]}
-- Affected assets: {state["investigation"]["affected_assets"]}
-- Urgency: {state["investigation"].get("urgency")}
-- Recommended owner: {state["investigation"].get("recommended_owner")}
-- Goal: hand off context for containment planning
-""".strip(),
-        f"I built the incident brief and timeline. The affected asset is {attack['target_ip']}:{attack['target_port']}, and the urgency is {state['investigation'].get('urgency')}. Response Planning Agent, prepare containment options.",
-        "handoff",
-    )
-    return state
+    state["investigation"] = fallback
+    return fallback
 
 
 def _fallback_mitigation_plan(state: AgentState):
@@ -1078,7 +973,7 @@ def _fallback_mitigation_plan(state: AgentState):
 def threat_resolve(state: AgentState) -> AgentState:
     attack = state["classification"]["attack"]
     classification = state["classification"]
-    investigation_data = state["investigation"]
+    investigation_data = _ensure_investigation_context(state)
     prompt = f"""
 Mitigation planning request:
 - Attack Type: {attack["attack_type"]}
@@ -1196,7 +1091,7 @@ def _fallback_policy_decision(state: AgentState):
 def policy(state: AgentState) -> AgentState:
     classification = state["classification"]
     mitigation_plan = state["mitigation_plan"]
-    investigation_data = state["investigation"]
+    investigation_data = _ensure_investigation_context(state)
     challenge_data = state.get("challenge_review") or {}
     attack = classification["attack"]
 
@@ -1423,6 +1318,7 @@ def report(state: AgentState) -> AgentState:
     resolved_in = random.randint(8, 30)
     steps_taken = len(state["action_result"].get("steps_executed", []))
     policy_mode = state["policy_decision"]["mode"]
+    investigation_data = _ensure_investigation_context(state)
     prompt = f"""
 Incident report request:
 - Attack Type: {attack["attack_type"]}
@@ -1435,7 +1331,7 @@ Incident report request:
 - Resolution: {status}
 - Policy Mode: {policy_mode}
 - Steps Taken: {steps_taken}
-- Investigation Summary: {state["investigation"]["summary"]}
+- Investigation Summary: {investigation_data["summary"]}
 
 Return a JSON object with exactly this structure:
 {{
@@ -1511,7 +1407,6 @@ _detection_builder.add_node("detection", detection)
 _detection_builder.add_node("correlation_agent", correlation)
 _detection_builder.add_node("threat_classification", threat_classification)
 _detection_builder.add_node("challenge_agent", challenge_review)
-_detection_builder.add_node("investigation_agent", investigation)
 _detection_builder.add_node("threat_resolve", threat_resolve)
 _detection_builder.add_node("policy", policy)
 _detection_builder.set_entry_point("normalization")
@@ -1519,8 +1414,7 @@ _detection_builder.add_edge("normalization", "detection")
 _detection_builder.add_edge("detection", "correlation_agent")
 _detection_builder.add_edge("correlation_agent", "threat_classification")
 _detection_builder.add_edge("threat_classification", "challenge_agent")
-_detection_builder.add_edge("challenge_agent", "investigation_agent")
-_detection_builder.add_edge("investigation_agent", "threat_resolve")
+_detection_builder.add_edge("challenge_agent", "threat_resolve")
 _detection_builder.add_edge("threat_resolve", "policy")
 _detection_builder.add_edge("policy", END)
 detection_graph = _detection_builder.compile()

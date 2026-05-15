@@ -528,7 +528,7 @@ function App() {
           speaker: entry.llm_agent || entry.agent,
           audience: next ? next.llm_agent || next.agent : "SOC Dashboard",
           message: entry.llm_used
-            ? `I completed ${entry.tool} using Gemini-backed reasoning. Please take the updated state and continue the investigation.`
+            ? `I completed ${entry.tool} using Gemini-backed reasoning. Please take the updated state and continue the workflow.`
             : `I completed ${entry.tool} using deterministic logic. Please continue with the updated incident state.`,
           stage: entry.output_summary?.current_stage || entry.tool,
           kind: "handoff",

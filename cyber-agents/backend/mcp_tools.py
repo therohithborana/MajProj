@@ -6,7 +6,6 @@ from typing import Callable
 from agents import (
     CLASSIFIER_SYSTEM_PROMPT,
     CHALLENGE_SYSTEM_PROMPT,
-    INVESTIGATOR_SYSTEM_PROMPT,
     POLICY_SYSTEM_PROMPT,
     REPORT_SYSTEM_PROMPT,
     RESPONSE_SYSTEM_PROMPT,
@@ -14,7 +13,6 @@ from agents import (
     challenge_review,
     correlation,
     detection,
-    investigation,
     normalization,
     policy,
     report,
@@ -84,15 +82,6 @@ TOOLS = [
         handler=challenge_review,
     ),
     McpTool(
-        name="analysis.investigate_incident",
-        title="Investigate Incident",
-        description="Build an analyst-ready incident brief from classification and evidence.",
-        input_schema={"type": "object", "properties": {"state": {"type": "object"}}, "required": ["state"]},
-        output_schema={"type": "object", "properties": {"state": {"type": "object"}}},
-        owner_agent="Analysis Agent",
-        handler=investigation,
-    ),
-    McpTool(
         name="response.plan_mitigation",
         title="Plan Mitigation",
         description="Generate a mitigation strategy and containment playbook.",
@@ -135,7 +124,6 @@ TOOLS_BY_NAME = {tool.name: tool for tool in TOOLS}
 LLM_AGENT_BY_TOOL = {
     "analysis.classify_threat": "Threat Classification Agent",
     "analysis.challenge_classification": "Challenge Agent",
-    "analysis.investigate_incident": "Investigation Agent",
     "response.plan_mitigation": "Response Planning Agent",
     "response.review_policy": "Policy Agent",
     "response.generate_report": "Reporting Agent",
@@ -146,11 +134,6 @@ TOOL_PROMPT_PROFILE = {
         "agent": "Threat Classification Agent",
         "system_prompt": CLASSIFIER_SYSTEM_PROMPT,
         "purpose": "Classify the suspicious activity conservatively from correlated evidence.",
-    },
-    "analysis.investigate_incident": {
-        "agent": "Investigation Agent",
-        "system_prompt": INVESTIGATOR_SYSTEM_PROMPT,
-        "purpose": "Build an analyst-ready incident brief, timeline, and attacker profile.",
     },
     "analysis.challenge_classification": {
         "agent": "Challenge Agent",
@@ -180,7 +163,6 @@ DETECTION_PLAN = [
     "telemetry.correlate_evidence",
     "analysis.classify_threat",
     "analysis.challenge_classification",
-    "analysis.investigate_incident",
     "response.plan_mitigation",
     "response.review_policy",
 ]
