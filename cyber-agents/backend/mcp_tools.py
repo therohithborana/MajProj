@@ -6,7 +6,6 @@ from typing import Callable
 from agents import (
     CLASSIFIER_SYSTEM_PROMPT,
     CHALLENGE_SYSTEM_PROMPT,
-    POLICY_SYSTEM_PROMPT,
     REPORT_SYSTEM_PROMPT,
     RESPONSE_SYSTEM_PROMPT,
     action,
@@ -14,7 +13,6 @@ from agents import (
     correlation,
     detection,
     normalization,
-    policy,
     report,
     threat_classification,
     threat_resolve,
@@ -90,15 +88,6 @@ TOOLS = [
         handler=threat_resolve,
     ),
     McpTool(
-        name="response.review_policy",
-        title="Review Policy",
-        description="Apply automation policy and determine whether response is autonomous or human-approved.",
-        input_schema={"type": "object", "properties": {"state": {"type": "object"}}, "required": ["state"]},
-        output_schema={"type": "object", "properties": {"state": {"type": "object"}}},
-        owner_agent="Response Agent",
-        handler=policy,
-    ),
-    McpTool(
         name="response.execute_action",
         title="Execute Action",
         description="Execute or escalate the response path according to approval state.",
@@ -124,7 +113,6 @@ LLM_AGENT_BY_TOOL = {
     "analysis.classify_threat": "Threat Classification Agent",
     "analysis.challenge_classification": "Challenge Agent",
     "response.plan_mitigation": "Response Planning Agent",
-    "response.review_policy": "Policy Agent",
     "response.generate_report": "Reporting Agent",
 }
 
@@ -144,11 +132,6 @@ TOOL_PROMPT_PROFILE = {
         "system_prompt": RESPONSE_SYSTEM_PROMPT,
         "purpose": "Draft safe Linux containment and remediation steps.",
     },
-    "response.review_policy": {
-        "agent": "Policy Agent",
-        "system_prompt": POLICY_SYSTEM_PROMPT,
-        "purpose": "Decide whether response should be autonomous, approved, or escalated.",
-    },
     "response.generate_report": {
         "agent": "Reporting Agent",
         "system_prompt": REPORT_SYSTEM_PROMPT,
@@ -163,7 +146,6 @@ DETECTION_PLAN = [
     "analysis.classify_threat",
     "analysis.challenge_classification",
     "response.plan_mitigation",
-    "response.review_policy",
 ]
 
 RESOLUTION_PLAN = [

@@ -436,7 +436,6 @@ def _make_progress_callback(loop, website_id, attack_id):
 
 
 async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dict, job_id: str | None = None):
-    policy_memory = _load_policy_memory(website["_id"])
     initial_state = {
         "website": website,
         "simulation": simulation,
@@ -456,7 +455,6 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
         "agent_discussion": [],
         "reasoning_trace": [],
         "llm_usage": {},
-        "policy_context": _policy_memory_summary(policy_memory),
         "current_stage": "collector_ingested",
         "notes": [],
         "assignee": None,
@@ -497,7 +495,6 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
         result.setdefault("runtime_metadata", {})["job_id"] = job_id
 
     active_incidents[attack_id] = result
-    _update_policy_memory(website["_id"], result, "proposed")
     _persist_incident(website["_id"], result)
     await broadcast(
         "incident_snapshot",
@@ -538,147 +535,72 @@ async def _run_detection_pipeline(website: dict, attack_id: str, simulation: dic
         },
     )
 
-    if result.get("policy_decision", {}).get("mode") == "auto_execute":
+    await broadcast(
+        "agent_update",
+        {
+            "attack_id": attack_id,
+            "website_id": website["_id"],
+            "current_stage": "action",
+            "message": "Action Agent is executing the mitigation plan now.",
+            "mitigation_plan": result.get("mitigation_plan"),
+            "tool_trace": result.get("tool_trace"),
+            "runtime_metadata": result.get("runtime_metadata", {}),
+        },
+    )
+    try:
+        final_state = await loop.run_in_executor(
+            None,
+            mcp_coordinator.run_resolution_pipeline,
+            {**result, "approval_status": "auto_approved"},
+            progress_cb,
+        )
+    except Exception as exc:
+        if job_id:
+            _update_job(job_id, "failed", error=str(exc), metadata={"attack_id": attack_id, "phase": "resolution"})
         await broadcast(
             "agent_update",
             {
                 "attack_id": attack_id,
                 "website_id": website["_id"],
-                "current_stage": "action",
-                "message": "Policy Agent auto-approved the response path. Action Agent is executing it now.",
-                "policy_decision": result.get("policy_decision"),
-                "tool_trace": result.get("tool_trace"),
-                "runtime_metadata": result.get("runtime_metadata", {}),
+                "current_stage": "resolution_failed",
+                "message": f"Resolution pipeline failed: {exc}",
             },
         )
-        try:
-            final_state = await loop.run_in_executor(
-                None,
-                mcp_coordinator.run_resolution_pipeline,
-                {**result, "approval_status": "auto_approved"},
-                progress_cb,
-            )
-        except Exception as exc:
-            if job_id:
-                _update_job(job_id, "failed", error=str(exc), metadata={"attack_id": attack_id, "phase": "auto_resolution"})
-            await broadcast(
-                "agent_update",
-                {
-                    "attack_id": attack_id,
-                    "website_id": website["_id"],
-                    "current_stage": "resolution_failed",
-                    "message": f"Autonomous resolution failed: {exc}",
-                },
-            )
-            raise
-        final_state["website_id"] = website["_id"]
-        active_incidents[attack_id] = final_state
-        _update_policy_memory(website["_id"], final_state, "resolved")
-        _persist_incident(website["_id"], final_state)
-        await broadcast(
-            "observability_update",
-            {
-                "website_id": website["_id"],
-                "attack_id": attack_id,
-                "observability": _observability_snapshot(website["_id"]),
-                "message": "OpenTelemetry recorded the autonomous response path.",
-            },
-        )
-        if job_id:
-            _update_job(job_id, "completed", metadata={"attack_id": attack_id, "phase": "resolved"})
-        await broadcast(
-            "incident_resolved",
-            {
-                "attack_id": attack_id,
-                "website_id": website["_id"],
-                "approval_status": final_state.get("approval_status"),
-                "current_stage": final_state.get("current_stage"),
-                "action_result": final_state.get("action_result"),
-                "incident_report": final_state.get("incident_report"),
-                "policy_decision": final_state.get("policy_decision"),
-                "agent_trace": final_state.get("agent_trace"),
-                "agent_messages": final_state.get("agent_messages"),
-                "agent_discussion": final_state.get("agent_discussion"),
-                "reasoning_trace": final_state.get("reasoning_trace"),
-                "protocol_trace": final_state.get("protocol_trace"),
-                "tool_trace": final_state.get("tool_trace"),
-                "runtime_metadata": final_state.get("runtime_metadata", {}),
-                "llm_usage": final_state.get("llm_usage"),
-                "message": "Autonomous response completed and the incident report is ready.",
-            },
-        )
-    elif result.get("policy_decision", {}).get("mode") == "approval_required":
-        await broadcast(
-            "agent_update",
-            {
-                "attack_id": attack_id,
-                "website_id": website["_id"],
-                "current_stage": "awaiting_approval",
-                "message": "Policy Agent requires human approval before containment is executed.",
-                "policy_decision": result.get("policy_decision"),
-                "protocol_trace": result.get("protocol_trace"),
-                "tool_trace": result.get("tool_trace"),
-                "runtime_metadata": result.get("runtime_metadata", {}),
-            },
-        )
-        if job_id:
-            _update_job(job_id, "awaiting_approval", metadata={"attack_id": attack_id, "phase": "awaiting_approval"})
-    else:
-        try:
-            final_state = await loop.run_in_executor(
-                None,
-                mcp_coordinator.run_resolution_pipeline,
-                {**result, "approval_status": "manual_required"},
-                progress_cb,
-            )
-        except Exception as exc:
-            if job_id:
-                _update_job(job_id, "failed", error=str(exc), metadata={"attack_id": attack_id, "phase": "manual_escalation"})
-            await broadcast(
-                "agent_update",
-                {
-                    "attack_id": attack_id,
-                    "website_id": website["_id"],
-                    "current_stage": "resolution_failed",
-                    "message": f"Manual escalation path failed: {exc}",
-                },
-            )
-            raise
-        final_state["website_id"] = website["_id"]
-        active_incidents[attack_id] = final_state
-        _persist_incident(website["_id"], final_state)
-        await broadcast(
-            "observability_update",
-            {
-                "website_id": website["_id"],
-                "attack_id": attack_id,
-                "observability": _observability_snapshot(website["_id"]),
-                "message": "OpenTelemetry recorded the escalation and reporting path.",
-            },
-        )
-        if job_id:
-            _update_job(job_id, "completed", metadata={"attack_id": attack_id, "phase": "manual_escalation"})
-        await broadcast(
-            "incident_resolved",
-            {
-                "attack_id": attack_id,
-                "website_id": website["_id"],
-                "approval_status": final_state.get("approval_status"),
-                "current_stage": final_state.get("current_stage"),
-                "action_result": final_state.get("action_result"),
-                "incident_report": final_state.get("incident_report"),
-                "policy_decision": final_state.get("policy_decision"),
-                "agent_trace": final_state.get("agent_trace"),
-                "agent_messages": final_state.get("agent_messages"),
-                "agent_discussion": final_state.get("agent_discussion"),
-                "reasoning_trace": final_state.get("reasoning_trace"),
-                "protocol_trace": final_state.get("protocol_trace"),
-                "tool_trace": final_state.get("tool_trace"),
-                "runtime_metadata": final_state.get("runtime_metadata", {}),
-                "llm_usage": final_state.get("llm_usage"),
-                "message": "Incident was escalated for manual follow-up with a completed AI report.",
-            },
-        )
+        raise
+    final_state["website_id"] = website["_id"]
+    active_incidents[attack_id] = final_state
+    _persist_incident(website["_id"], final_state)
+    await broadcast(
+        "observability_update",
+        {
+            "website_id": website["_id"],
+            "attack_id": attack_id,
+            "observability": _observability_snapshot(website["_id"]),
+            "message": "OpenTelemetry recorded the response path.",
+        },
+    )
+    if job_id:
+        _update_job(job_id, "completed", metadata={"attack_id": attack_id, "phase": "resolved"})
+    await broadcast(
+        "incident_resolved",
+        {
+            "attack_id": attack_id,
+            "website_id": website["_id"],
+            "approval_status": final_state.get("approval_status"),
+            "current_stage": final_state.get("current_stage"),
+            "action_result": final_state.get("action_result"),
+            "incident_report": final_state.get("incident_report"),
+            "agent_trace": final_state.get("agent_trace"),
+            "agent_messages": final_state.get("agent_messages"),
+            "agent_discussion": final_state.get("agent_discussion"),
+            "reasoning_trace": final_state.get("reasoning_trace"),
+            "protocol_trace": final_state.get("protocol_trace"),
+            "tool_trace": final_state.get("tool_trace"),
+            "runtime_metadata": final_state.get("runtime_metadata", {}),
+            "llm_usage": final_state.get("llm_usage"),
+            "message": "Response completed and the incident report is ready.",
+        },
+    )
 
     return attack_id
 

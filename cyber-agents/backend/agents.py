@@ -3,6 +3,8 @@ import logging
 import random
 from collections import Counter, defaultdict
 from typing import TypedDict
+from urllib.request import Request as UrlRequest, urlopen
+from urllib.error import URLError
 
 from langgraph.graph import END, StateGraph
 
@@ -38,13 +40,6 @@ You are the Threat Classification Agent in an AI cybersecurity platform.
 Your role is to classify suspicious activity based on evidence from detection and correlation stages.
 You must behave like a careful security analyst, not a marketing assistant.
 Prefer conservative classifications, explicitly cite signals, and return strict JSON only.
-""".strip()
-
-POLICY_SYSTEM_PROMPT = """
-You are the Policy Agent in an AI cybersecurity platform.
-Your role is to decide whether a proposed response should be auto-executed, require human approval, or be manually escalated.
-Optimize for operational safety, reversibility, blast radius, and confidence in the evidence.
-Return strict JSON only.
 """.strip()
 
 RESPONSE_SYSTEM_PROMPT = """
@@ -203,17 +198,16 @@ def _speak(
     fallback: str,
     kind: str = "statement",
 ):
-    message, llm_meta = _llm_text(system_prompt, context_prompt, fallback)
-    runtime = _llm_runtime_label(llm_meta) if llm_meta.get("used") else "fallback"
+    message = fallback
     _record_reasoning(
         state,
         speaker,
         stage,
         "discussion",
         message,
-        reasoning_details=llm_meta.get("reasoning_details", []),
-        used=bool(llm_meta.get("used")),
-        runtime=runtime,
+        reasoning_details=[],
+        used=False,
+        runtime="fallback",
         prompt_preview=context_prompt,
     )
     logger.info(
@@ -221,11 +215,11 @@ def _speak(
         stage,
         speaker,
         audience or "-",
-        bool(llm_meta.get("used")),
-        runtime,
+        False,
+        "fallback",
         message,
     )
-    _record_discussion(state, speaker, message, stage, audience, kind, "gemini" if llm_meta.get("used") else "fallback")
+    _record_discussion(state, speaker, message, stage, audience, kind, "fallback")
 
 
 def _mark_llm_usage(state: AgentState, agent: str, used: bool, runtime: str | None = None):
@@ -381,7 +375,9 @@ Speak to the Detection Agent after normalization. Be detailed about what telemet
 {sample_events_summary}
 - Describe the incoming data volume, what types of events dominate, any unusual source IPs, and what the Detection Agent should look for.
 """.strip(),
-        f"I normalized {len(normalized_events)} events across access, auth, and network channels. Detection Agent, please inspect them for suspicious patterns.",
+        f"I normalized {len(normalized_events)} events in total: {dict(event_counts)}. Sources: {sorted(unique_sources)[:10]}. "
+        f"Detection Agent, inspect these across {len(unique_sources)} unique sources for anomalies. "
+        f"First few events: {sample_events_summary}. Look for failed auth spikes, port scans, or suspicious path probes.",
         "handoff",
     )
     return state
@@ -615,7 +611,12 @@ Speak to the Correlation Agent after first-pass detection. Be thorough and analy
 - Unique sources: {len(unique_src_ips)}
 - Explain your heuristic reasoning and why each candidate label was considered or ruled out. Then ask for correlation.
 """.strip(),
-        f"{detection_message} Correlation Agent, can you connect the related events and confirm the storyline?",
+        f"{summary} "
+        f"Source {primary_src_ip} hit {dominant_target}:{target_port} with {max_failed_auth} failed auth attempts, "
+        f"{request_burst} request burst, scanning {scan_span} ports with {suspicious_path_hits} path probes. "
+        f"Total traffic: {packet_total} packets / {bytes_total} bytes ({syn_count} SYNs). "
+        f"Flagged paths: {flagged_paths[:8]}. Candidates: {candidate_labels}. "
+        f"Correlation Agent, connect these events across {len(unique_src_ips)} sources into a coherent storyline.",
         "question",
     )
     return state
@@ -685,7 +686,9 @@ Speak to the Threat Classification Agent after correlation. Be detailed about th
 - Timeline items: {len(timeline)}
 - Describe the attack narrative: how the events relate in time, which events are most critical, and what pattern emerges from the correlated data.
 """.strip(),
-        f"I linked {len(correlated)} related events around source {primary_src} and target {anomaly['target_ip']}. Threat Classification Agent, please classify the attack type.",
+        f"I correlated {len(correlated)} events around source {primary_src} → target {anomaly['target_ip']}:{anomaly['target_port']}. "
+        f"Affected paths: {affected_paths}. Ports: {affected_ports}. Timeline spans {len(timeline)} segments. "
+        f"Threat Classification Agent, classify this based on the correlated evidence.",
         "handoff",
     )
     return state
@@ -904,7 +907,11 @@ Speak to the Challenge Agent after classification. Be detailed about how you rea
 - NIDS model probability: {ml_components.get("nids", {}).get("probability") if ml_components else "N/A"}
 - Explain what the ML model predicted, how you weighed the feature pressures, and why you converged on this classification. Then ask the Challenge Agent to review.
 """.strip(),
-        f"Based on the evidence, this looks like {predicted_class} with {round(confidence * 100, 1)}% confidence from {confidence_source}. Challenge Agent, please review whether this verdict is too aggressive or if another class fits better.",
+        f"I classified this as {predicted_class} ({round(confidence * 100, 1)}% confidence, source={confidence_source}, severity={severity}, risk={risk_score}/100). "
+        f"ML model ({ml_result.get('model_version', 'unknown')}) per-class scores: {json.dumps(confidence_scores)}. "
+        f"Feature pressures: auth={ml_features.get('auth_pressure')}, scan={ml_features.get('scan_pressure')}, recon={ml_features.get('recon_pressure')}, volume={ml_features.get('volume_pressure')}. "
+        f"Raw anomaly: failed_auth={anomaly['failed_auth_attempts']}, port_span={anomaly['port_span']}, path_hits={anomaly['suspicious_path_hits']}, burst={anomaly['request_burst']}. "
+        f"Challenge Agent, review this verdict for false-positive risk and alternative classes.",
         "question",
     )
     return state
@@ -1037,7 +1044,11 @@ Speak to the Response Planning Agent after reviewing the primary classification.
 - Notes: {fallback["notes"]}
 - Explain whether you agreed or disagreed with the classification, what alternative interpretations you considered, what evidence gaps you identified, and how the Response Planning Agent should factor this into their mitigation strategy.
 """.strip(),
-        f"{challenge_message} Response Planning Agent, use this review context while preparing containment options.",
+        f"{challenge_message} "
+        f"Confidence in primary: {round(fallback.get('confidence_in_primary', 0) * 100, 1)}%. "
+        f"Alternative considered: {fallback['alternative_class']}. False-positive risk: {fallback['false_positive_risk']}. "
+        f"Notes: {fallback['notes']}. "
+        f"Response Planning Agent, factor this review into your mitigation strategy.",
         "reply",
     )
     return state
@@ -1201,161 +1212,29 @@ Speak to the Policy Agent after drafting the mitigation plan. Be specific about 
 - Estimated mitigation time: {state["mitigation_plan"].get("estimated_mitigation_time", "unknown")}
 - Explain the mitigation strategy, what each command does, the blast radius and reversibility of each step, and ask the Policy Agent to decide the execution mode.
 """.strip(),
-        f"I drafted the containment plan '{state['mitigation_plan']['strategy']}' with {len(mitigation_steps)} steps. Policy Agent, decide whether we can execute this automatically.",
+        f"I drafted the mitigation plan: '{state['mitigation_plan']['strategy']}' ({len(mitigation_steps)} steps, "
+        f"estimated {state['mitigation_plan'].get('estimated_mitigation_time', 'unknown')}). "
+        f"Collateral risk: {state['mitigation_plan']['collateral_risk']}. "
+        f"Commands: {steps_detail}. "
+        f"Policy Agent, decide execution mode for this {attack['attack_type']} from {attack['primary_src_ip']}.",
         "question",
     )
     return state
 
 
-def _fallback_policy_decision(state: AgentState):
-    classification = state["classification"]
-    attack = classification["attack"]
-    risk_score = classification["risk_score"]
-    challenge_data = state.get("challenge_review") or {}
-    policy_context = state.get("policy_context") or {}
-    prior_pattern = (policy_context.get("attack_type_patterns") or {}).get(attack["attack_type"], {})
-    if challenge_data.get("challenge_outcome") == "challenge":
-        return "approval_required", "Challenge Agent flagged ambiguity in the primary verdict, so analyst approval is required."
-    if attack["attack_type"] == "BruteForce" and risk_score < 90:
-        mode = "auto_execute"
-        reason = "Credential abuse can be contained with reversible low-blast-radius actions."
-    elif attack["attack_type"] == "SuspiciousRecon":
-        mode = "auto_execute"
-        reason = "Reconnaissance is low-risk to contain and benefits from fast automated blocking."
-    elif attack["attack_type"] == "PortScan":
-        mode = "approval_required"
-        reason = "Port scan response may impact legitimate scanners or monitoring ranges."
-    elif attack["attack_type"] == "DDoS":
-        mode = "approval_required"
-        reason = "Traffic controls on public services can affect legitimate customer sessions."
-    else:
-        mode = "manual_escalation"
-        reason = "The evidence is ambiguous and requires a human analyst."
-    preferred_mode = prior_pattern.get("preferred_mode")
-    if preferred_mode and prior_pattern.get("count", 0) >= 3 and mode != "manual_escalation":
-        reason = f"{reason} Historical policy memory for {attack['attack_type']} incidents has usually favored {preferred_mode}."
-    return mode, reason
 
 
-def policy(state: AgentState) -> AgentState:
-    classification = state["classification"]
-    mitigation_plan = state["mitigation_plan"]
-    investigation_data = _ensure_investigation_context(state)
-    challenge_data = state.get("challenge_review") or {}
-    policy_context = state.get("policy_context") or {}
-    attack = classification["attack"]
 
-    mode, reason = _fallback_policy_decision(state)
-    policy_prompt = f"""
-Policy review request:
-- Attack type: {attack["attack_type"]}
-- Severity: {attack["severity"]}
-- Confidence: {classification["confidence"]}
-- Confidence source: {classification["confidence_source"]}
-- Risk score: {classification["risk_score"]}
-- Challenge review: {challenge_data}
-- Policy memory summary: {policy_context}
-- Investigation urgency: {investigation_data.get("urgency")}
-- Investigation summary: {investigation_data["summary"]}
-- Mitigation strategy: {mitigation_plan["strategy"]}
-- Collateral risk: {mitigation_plan["collateral_risk"]}
-- Steps: {mitigation_plan["steps"]}
-
-Return a JSON object with exactly this structure:
-{{
-  "mode": "auto_execute or approval_required or manual_escalation",
-  "reason": "one concise sentence",
-  "safety_notes": ["note 1", "note 2"],
-  "requires_human_review": true
-}}
-
-Rules:
-- prefer auto_execute only for clearly reversible low-blast-radius actions
-- approval_required is appropriate for customer-facing service impact
-- manual_escalation is appropriate for ambiguous or high-uncertainty cases
-- return JSON only
-""".strip()
-
-    safety_notes = []
-    decision_source = "heuristic"
+def _send_mitigation_commands(attack_type: str, source_ip: str, steps: list[dict]):
+    commands = [{"step": s["step"], "action": s["action"], "command": s.get("command", "")} for s in steps]
+    payload = json.dumps({"attack_type": attack_type, "source_ip": source_ip, "commands": commands}).encode()
     try:
-        parsed, llm_meta = _llm_json(POLICY_SYSTEM_PROMPT, policy_prompt)
-        _record_reasoning(
-            state,
-            "Policy Agent",
-            "policy_decision",
-            "json",
-            llm_meta.get("text", ""),
-            reasoning_details=llm_meta.get("reasoning_details", []),
-            used=bool(llm_meta.get("used")),
-            runtime=_llm_runtime_label(llm_meta) if llm_meta.get("used") else "fallback",
-            prompt_preview=policy_prompt,
-        )
-        mode = parsed.get("mode", mode)
-        if mode not in {"auto_execute", "approval_required", "manual_escalation"}:
-            mode = _fallback_policy_decision(state)[0]
-        reason = parsed.get("reason", reason)
-        safety_notes = parsed.get("safety_notes", [])
-        decision_source = "llm_reviewed"
-        _mark_llm_usage(state, "Policy Agent", True, _llm_runtime_label(llm_meta))
-    except Exception:
-        _mark_llm_usage(state, "Policy Agent", False)
-
-    state["policy_decision"] = {
-        "mode": mode,
-        "reason": reason,
-        "decision_source": decision_source,
-        "auto_execute": mode == "auto_execute",
-        "safe_actions": [step["action"] for step in mitigation_plan.get("steps", []) if step.get("reversible")],
-        "safety_notes": safety_notes,
-        "policy_memory_considered": bool(policy_context),
-    }
-    state["approval_status"] = (
-        "auto_approved" if mode == "auto_execute" else "pending" if mode == "approval_required" else "manual_required"
-    )
-    state["current_stage"] = "policy_decision"
-    _trace(
-        state,
-        "Policy Agent",
-        "policy_decision",
-        f"Selected {mode} based on risk, reversibility, blast radius, and review context.",
-        {"reason": reason, "decision_source": decision_source},
-    )
-    _record_message(
-        state,
-        "Policy Agent",
-        "Action Agent",
-        "Policy verdict",
-        "Policy review has determined the action path for containment.",
-        {
-            "mode": mode,
-            "reason": reason,
-            "decision_source": decision_source,
-        },
-    )
-    attack = state["classification"].get("attack", {})
-    _speak(
-        state,
-        "Policy Agent",
-        "policy_decision",
-        "Action Agent",
-        POLICY_SYSTEM_PROMPT,
-        f"""
-Speak to the Action Agent after policy review. Explain your reasoning clearly.
-- Mode: {mode}
-- Reason: {reason}
-- Decision source: {decision_source}
-- Attack type: {attack.get("attack_type", "unknown")}
-- Severity: {attack.get("severity", "unknown")}
-- Risk score: {state["classification"].get("risk_score", "N/A")}
-- Safety notes: {safety_notes}
-- Reversible actions: {[s["action"] for s in mitigation_plan.get("steps", []) if s.get("reversible")]}
-- Explain why you chose {mode} over the other options, considering blast radius, reversibility, confidence, and challenge review context. Tell the Action Agent exactly what to do.
-""".strip(),
-        reason,
-        "decision",
-    )
-    return state
+        req = UrlRequest("http://localhost:3001/mitigate", data=payload, headers={"Content-Type": "application/json"}, method="POST")
+        with urlopen(req, timeout=5):
+            pass
+        logger.info("Mitigation commands sent to dummy-site for %s from %s", attack_type, source_ip)
+    except (URLError, OSError):
+        logger.warning("Dummy-site server not reachable at localhost:3001 — mitigation logged locally")
 
 
 def action(state: AgentState) -> AgentState:
@@ -1378,6 +1257,7 @@ def action(state: AgentState) -> AgentState:
             "blocked_ips": attack["src_ips"],
         }
         state["current_stage"] = "mitigated"
+        _send_mitigation_commands(attack["attack_type"], attack["primary_src_ip"], executed_steps)
     elif decision == "rejected":
         action_result = {
             "status": "MANUAL_INTERVENTION_REQUIRED",
@@ -1441,7 +1321,11 @@ Speak to the Reporting Agent after the action stage. Detail what happened operat
 - Total execution time: {action_result.get("total_execution_time_ms", "N/A")}ms
 - Explain what was executed, which IPs were blocked, whether it was autonomous or required human approval, and what the Reporting Agent should include in the final summary.
 """.strip(),
-        f"{action_message} Reporting Agent, prepare the final incident summary.",
+        f"{action_message} "
+        f"Decision: {decision}. Status: {action_result['status']}. Mode: {action_result['execution_mode']}. "
+        f"Blocked IPs: {action_result.get('blocked_ips', 'N/A')}. "
+        f"{steps_detail} "
+        f"Reporting Agent, prepare the final incident summary.",
         "handoff",
     )
     return state
@@ -1451,13 +1335,12 @@ def _fallback_incident_report(state: AgentState, resolved_in: int):
     attack = state["classification"]["attack"]
     classification = state["classification"]
     status = state["action_result"]["status"]
-    policy_decision = state["policy_decision"]
     return {
         "report_id": f"INC-{attack['attack_id']}",
         "executive_summary": (
             f"Telemetry from collector-fed access, auth, and network streams revealed a {attack['severity']} "
             f"{attack['attack_type']} incident targeting {attack['target_ip']}:{attack['target_port']}. "
-            f"CyberAgent investigated, planned a response, applied policy mode {policy_decision['mode']}, and finished with status {status}."
+            f"CyberAgent investigated, planned a response, and finished with status {status}."
         ),
         "attack_summary": {
             "type": attack["attack_type"],
@@ -1470,7 +1353,6 @@ def _fallback_incident_report(state: AgentState, resolved_in: int):
         },
         "response": status,
         "automation": {
-            "policy_mode": policy_decision["mode"],
             "execution_mode": state["action_result"].get("execution_mode"),
         },
         "recommendations": [
@@ -1493,7 +1375,7 @@ def report(state: AgentState) -> AgentState:
     status = state["action_result"]["status"]
     resolved_in = random.randint(8, 30)
     steps_taken = len(state["action_result"].get("steps_executed", []))
-    policy_mode = state["policy_decision"]["mode"]
+    execution_mode = state["action_result"].get("execution_mode", "AUTONOMOUS")
     investigation_data = _ensure_investigation_context(state)
     prompt = f"""
 Incident report request:
@@ -1505,7 +1387,7 @@ Incident report request:
 - Confidence Source: {classification["confidence_source"]}
 - Risk Score: {classification["risk_score"]}/100
 - Resolution: {status}
-- Policy Mode: {policy_mode}
+- Execution Mode: {execution_mode}
 - Steps Taken: {steps_taken}
 - Investigation Summary: {investigation_data["summary"]}
 
@@ -1524,8 +1406,7 @@ Return a JSON object with exactly this structure:
   }},
   "response": "{status}",
   "automation": {{
-    "policy_mode": "{policy_mode}",
-    "execution_mode": "{state["action_result"].get("execution_mode", "")}"
+    "execution_mode": "{execution_mode}"
   }},
   "recommendations": ["recommendation 1", "recommendation 2", "recommendation 3"],
   "timeline": {{
@@ -1585,11 +1466,14 @@ Speak to the SOC Dashboard after final reporting. Provide a comprehensive summar
 - Source: {attack["primary_src_ip"]}
 - Target: {attack["target_ip"]}:{attack["target_port"]}
 - Response: {status}
-- Policy mode: {policy_mode}
+- Execution mode: {execution_mode}
 - Recommendations: {recs_text}
 - Explain the incident outcome, what response was taken, and what recommendations remain for the security team.
 """.strip(),
-        f"I compiled the final incident report. Summary: {state['incident_report']['executive_summary']}",
+        f"Final incident report compiled: {state['incident_report']['report_id']}. "
+        f"Attack: {attack['attack_type']} ({attack['severity']}) from {attack['primary_src_ip']} → {attack['target_ip']}:{attack['target_port']}. "
+        f"Response: {status} ({execution_mode}). Recommendations: {recs_text}. "
+        f"Summary: {state['incident_report']['executive_summary']}",
         "summary",
     )
     return state
@@ -1602,15 +1486,13 @@ _detection_builder.add_node("correlation_agent", correlation)
 _detection_builder.add_node("threat_classification", threat_classification)
 _detection_builder.add_node("challenge_agent", challenge_review)
 _detection_builder.add_node("threat_resolve", threat_resolve)
-_detection_builder.add_node("policy", policy)
 _detection_builder.set_entry_point("normalization")
 _detection_builder.add_edge("normalization", "detection")
 _detection_builder.add_edge("detection", "correlation_agent")
 _detection_builder.add_edge("correlation_agent", "threat_classification")
 _detection_builder.add_edge("threat_classification", "challenge_agent")
 _detection_builder.add_edge("challenge_agent", "threat_resolve")
-_detection_builder.add_edge("threat_resolve", "policy")
-_detection_builder.add_edge("policy", END)
+_detection_builder.add_edge("threat_resolve", END)
 detection_graph = _detection_builder.compile()
 
 _action_builder = StateGraph(AgentState)
