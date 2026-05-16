@@ -18,19 +18,19 @@ SENSITIVE_PATH_TOKENS = ("/admin", "/.env", "phpmyadmin", "wp-admin", "server-st
 NORMALIZATION_SYSTEM_PROMPT = """
 You are the Normalization Agent in an AI cybersecurity platform.
 Your role is to convert raw collector telemetry into a consistent event schema and brief the next agent clearly.
-When asked for discussion, speak like a SOC operator in one concise natural sentence.
+When asked for discussion, speak like a SOC operator describing what telemetry was received, the total event volume, the event types broken down by channel, the number of unique source IPs observed, and any noteworthy patterns in the incoming data (e.g. a single source dominating, unexpected event types, gaps in coverage).
 """.strip()
 
 DETECTION_SYSTEM_PROMPT = """
 You are the Detection Agent in an AI cybersecurity platform.
 Your role is to inspect normalized access, auth, and network telemetry for suspicious patterns and flag likely threats.
-When asked for discussion, speak like a SOC operator in one concise natural sentence.
+When asked for discussion, speak like a SOC operator detailing what suspicious signals you found: the primary source IP and its activity volume, failed authentication counts, port scan width, sensitive path probes, packet rates, and which attack classifications are candidates (DDoS, BruteForce, PortScan, SuspiciousRecon) based on specific heuristics. Explain why the evidence points toward or away from each candidate.
 """.strip()
 
 CORRELATION_SYSTEM_PROMPT = """
 You are the Correlation Agent in an AI cybersecurity platform.
 Your role is to group related suspicious events into a single incident storyline with source, target, and timing context.
-When asked for discussion, speak like a SOC operator in one concise natural sentence.
+When asked for discussion, speak like a SOC operator connecting the dots: which events from the Detection Agent's findings are related, how many events correlate to the primary source IP, the affected paths and ports, the timeline of activity, and how this creates a coherent attack narrative.
 """.strip()
 
 CLASSIFIER_SYSTEM_PROMPT = """
@@ -68,7 +68,7 @@ Return strict JSON only.
 ACTION_SYSTEM_PROMPT = """
 You are the Action Agent in an AI cybersecurity platform.
 Your role is to execute the approved response path or escalate the incident safely for human responders.
-When asked for discussion, speak like a SOC operator in one concise natural sentence.
+When asked for discussion, speak like a SOC operator explaining what action was taken, why based on the approval decision and policy mode, what commands were executed (or would be executed), the execution status, and any next steps for the human team.
 """.strip()
 
 
@@ -283,7 +283,6 @@ def _llm_text(system_prompt: str, task_prompt: str, fallback: str) -> tuple[str,
 
 Rules:
 - return plain text only
-- one short natural utterance
 - no markdown
 - no JSON
 - no speaker label
@@ -362,6 +361,10 @@ def normalization(state: AgentState) -> AgentState:
         "Telemetry is normalized and grouped into access, auth, and network channels.",
         state["telemetry"]["normalization_brief"],
     )
+    sample_events_summary = "\n".join(
+        f"  [{e.get('event_type')}] src={e.get('src_ip')} dst={e.get('dst_ip')}:{e.get('port')} path={e.get('path')} status={e.get('status_code')} method={e.get('method')}"
+        for e in normalized_events[:5]
+    )
     _speak(
         state,
         "Normalization Agent",
@@ -369,11 +372,14 @@ def normalization(state: AgentState) -> AgentState:
         "Detection Agent",
         NORMALIZATION_SYSTEM_PROMPT,
         f"""
-Speak to the Detection Agent after normalization.
+Speak to the Detection Agent after normalization. Be detailed about what telemetry was received.
 - Total events: {len(normalized_events)}
 - Event counts: {dict(event_counts)}
 - Unique sources: {len(unique_sources)}
-- Goal: hand off the normalized telemetry for threat inspection
+- Sources: {sorted(unique_sources)[:10]}
+- Sample events (first 5):
+{sample_events_summary}
+- Describe the incoming data volume, what types of events dominate, any unusual source IPs, and what the Detection Agent should look for.
 """.strip(),
         f"I normalized {len(normalized_events)} events across access, auth, and network channels. Detection Agent, please inspect them for suspicious patterns.",
         "handoff",
@@ -593,7 +599,7 @@ Rules:
         "Correlation Agent",
         DETECTION_SYSTEM_PROMPT,
         f"""
-Speak to the Correlation Agent after first-pass detection.
+Speak to the Correlation Agent after first-pass detection. Be thorough and analytical.
 - Detection summary: {summary}
 - Candidate labels: {candidate_labels or ["Baseline"]}
 - Primary source: {primary_src_ip}
@@ -602,7 +608,12 @@ Speak to the Correlation Agent after first-pass detection.
 - Request burst: {request_burst}
 - Port span: {scan_span}
 - Suspicious path hits: {suspicious_path_hits}
-- Ask for correlation of the related events
+- Total packets: {packet_total}
+- Total bytes: {bytes_total}
+- SYN count: {syn_count}
+- Flagged sensitive paths: {flagged_paths[:8]}
+- Unique sources: {len(unique_src_ips)}
+- Explain your heuristic reasoning and why each candidate label was considered or ruled out. Then ask for correlation.
 """.strip(),
         f"{detection_message} Correlation Agent, can you connect the related events and confirm the storyline?",
         "question",
@@ -665,13 +676,14 @@ def correlation(state: AgentState) -> AgentState:
         "Threat Classification Agent",
         CORRELATION_SYSTEM_PROMPT,
         f"""
-Speak to the Threat Classification Agent after correlation.
+Speak to the Threat Classification Agent after correlation. Be detailed about the groupings.
 - Primary source: {primary_src}
 - Target: {anomaly["target_ip"]}:{anomaly["target_port"]}
 - Correlated event count: {len(correlated)}
 - Affected paths: {affected_paths}
 - Affected ports: {affected_ports}
-- Goal: hand off the correlated evidence for classification
+- Timeline items: {len(timeline)}
+- Describe the attack narrative: how the events relate in time, which events are most critical, and what pattern emerges from the correlated data.
 """.strip(),
         f"I linked {len(correlated)} related events around source {primary_src} and target {anomaly['target_ip']}. Threat Classification Agent, please classify the attack type.",
         "handoff",
@@ -868,6 +880,8 @@ Rules:
         f"Classified the incident as {predicted_class} with {round(confidence * 100, 1)}% confidence ({confidence_source}).",
         state["classification"]["classification_brief"],
     )
+    ml_features = ml_result.get("features", {})
+    ml_components = ml_result.get("components", {})
     _speak(
         state,
         "Threat Classification Agent",
@@ -875,13 +889,20 @@ Rules:
         "Challenge Agent",
         CLASSIFIER_SYSTEM_PROMPT,
         f"""
-Speak to the Challenge Agent after classification.
+Speak to the Challenge Agent after classification. Be detailed about how you reached this verdict.
 - Predicted class: {predicted_class}
-- Confidence: {confidence}
+- Confidence: {round(confidence * 100, 1)}%
 - Confidence source: {confidence_source}
+- ML model version: {ml_result.get("model_version", "unknown")}
+- ML per-class scores: {json.dumps(confidence_scores)}
 - Candidate labels: {anomaly["candidate_labels"]}
-- Risk score: {risk_score}
-- Ask for a challenge review of the verdict
+- Risk score: {risk_score}/100
+- Severity: {severity}
+- ML feature analysis: auth_pressure={ml_features.get("auth_pressure")}, scan_pressure={ml_features.get("scan_pressure")}, recon_pressure={ml_features.get("recon_pressure")}, volume_pressure={ml_features.get("volume_pressure")}
+- Failed auth attempts: {anomaly["failed_auth_attempts"]}, Port span: {anomaly["port_span"]}, Suspicious path hits: {anomaly["suspicious_path_hits"]}, Request burst: {anomaly["request_burst"]}
+- WAF model probability: {ml_components.get("waf", {}).get("probability") if ml_components else "N/A"}
+- NIDS model probability: {ml_components.get("nids", {}).get("probability") if ml_components else "N/A"}
+- Explain what the ML model predicted, how you weighed the feature pressures, and why you converged on this classification. Then ask the Challenge Agent to review.
 """.strip(),
         f"Based on the evidence, this looks like {predicted_class} with {round(confidence * 100, 1)}% confidence from {confidence_source}. Challenge Agent, please review whether this verdict is too aggressive or if another class fits better.",
         "question",
@@ -1007,13 +1028,14 @@ Rules:
         "Response Planning Agent",
         CHALLENGE_SYSTEM_PROMPT,
         f"""
-Speak to the Response Planning Agent after reviewing the primary classification.
+Speak to the Response Planning Agent after reviewing the primary classification. Be specific about what you found.
 - Primary class: {classification["predicted_class"]}
 - Challenge outcome: {fallback["challenge_outcome"]}
 - Alternative class: {fallback["alternative_class"]}
 - False-positive risk: {fallback["false_positive_risk"]}
+- Confidence in primary: {round(fallback.get("confidence_in_primary", 0) * 100, 1)}%
 - Notes: {fallback["notes"]}
-- Goal: tell the Response Planning Agent how much to trust the primary verdict
+- Explain whether you agreed or disagreed with the classification, what alternative interpretations you considered, what evidence gaps you identified, and how the Response Planning Agent should factor this into their mitigation strategy.
 """.strip(),
         f"{challenge_message} Response Planning Agent, use this review context while preparing containment options.",
         "reply",
@@ -1156,6 +1178,11 @@ Rules:
             "steps": len(state["mitigation_plan"].get("steps", [])),
         },
     )
+    mitigation_steps = state["mitigation_plan"].get("steps", [])
+    steps_detail = "; ".join(
+        f"{s['step']}. {s['action']} (`{s['command']}`) - {s['impact']} [reversible={s.get('reversible', False)}]"
+        for s in mitigation_steps
+    )
     _speak(
         state,
         "Response Planning Agent",
@@ -1163,15 +1190,18 @@ Rules:
         "Policy Agent",
         RESPONSE_SYSTEM_PROMPT,
         f"""
-Speak to the Policy Agent after drafting the mitigation plan.
+Speak to the Policy Agent after drafting the mitigation plan. Be specific about the proposed actions.
 - Strategy: {state["mitigation_plan"]["strategy"]}
 - Collateral risk: {state["mitigation_plan"]["collateral_risk"]}
-- Steps: {len(state["mitigation_plan"].get("steps", []))}
+- Steps: {len(mitigation_steps)}
 - Attack type: {attack["attack_type"]}
+- Source: {attack["primary_src_ip"]}
 - Target: {attack["target_ip"]}:{attack["target_port"]}
-- Goal: ask whether the plan is safe for automatic execution
+- Detailed steps: {steps_detail}
+- Estimated mitigation time: {state["mitigation_plan"].get("estimated_mitigation_time", "unknown")}
+- Explain the mitigation strategy, what each command does, the blast radius and reversibility of each step, and ask the Policy Agent to decide the execution mode.
 """.strip(),
-        f"I drafted the containment plan '{state['mitigation_plan']['strategy']}' with {len(state['mitigation_plan'].get('steps', []))} steps. Policy Agent, decide whether we can execute this automatically.",
+        f"I drafted the containment plan '{state['mitigation_plan']['strategy']}' with {len(mitigation_steps)} steps. Policy Agent, decide whether we can execute this automatically.",
         "question",
     )
     return state
@@ -1303,6 +1333,7 @@ Rules:
             "decision_source": decision_source,
         },
     )
+    attack = state["classification"].get("attack", {})
     _speak(
         state,
         "Policy Agent",
@@ -1310,12 +1341,16 @@ Rules:
         "Action Agent",
         POLICY_SYSTEM_PROMPT,
         f"""
-Speak to the Action Agent after policy review.
+Speak to the Action Agent after policy review. Explain your reasoning clearly.
 - Mode: {mode}
 - Reason: {reason}
 - Decision source: {decision_source}
+- Attack type: {attack.get("attack_type", "unknown")}
+- Severity: {attack.get("severity", "unknown")}
+- Risk score: {state["classification"].get("risk_score", "N/A")}
 - Safety notes: {safety_notes}
-- Goal: explain the execution decision clearly
+- Reversible actions: {[s["action"] for s in mitigation_plan.get("steps", []) if s.get("reversible")]}
+- Explain why you chose {mode} over the other options, considering blast radius, reversibility, confidence, and challenge review context. Tell the Action Agent exactly what to do.
 """.strip(),
         reason,
         "decision",
@@ -1385,6 +1420,11 @@ def action(state: AgentState) -> AgentState:
         action_message = "The analyst rejected automated containment, so I'm moving this incident into the manual response queue."
     else:
         action_message = "Policy escalation requires manual intervention, so I'm creating the handoff for human responders."
+    executed_steps = action_result.get("steps_executed", [])
+    steps_detail = "; ".join(
+        f"Step {s['step']}: {s['action']} on {s.get('command', 'N/A')} - {s.get('status', 'unknown')} ({s.get('execution_time_ms', 0)}ms)"
+        for s in executed_steps
+    ) if executed_steps else "No steps were executed."
     _speak(
         state,
         "Action Agent",
@@ -1392,11 +1432,14 @@ def action(state: AgentState) -> AgentState:
         "Reporting Agent",
         ACTION_SYSTEM_PROMPT,
         f"""
-Speak to the Reporting Agent after the action stage.
+Speak to the Reporting Agent after the action stage. Detail what happened operationally.
 - Approval decision: {decision}
 - Action status: {action_result["status"]}
 - Execution mode: {action_result["execution_mode"]}
-- Goal: tell reporting what happened operationally
+- Blocked IPs: {action_result.get("blocked_ips", "N/A")}
+- Steps executed: {steps_detail}
+- Total execution time: {action_result.get("total_execution_time_ms", "N/A")}ms
+- Explain what was executed, which IPs were blocked, whether it was autonomous or required human approval, and what the Reporting Agent should include in the final summary.
 """.strip(),
         f"{action_message} Reporting Agent, prepare the final incident summary.",
         "handoff",
@@ -1525,6 +1568,8 @@ Return JSON only.
         "Generated the final incident summary and recommendations.",
         {"report_id": state["incident_report"]["report_id"]},
     )
+    recommendations = state["incident_report"].get("recommendations", [])
+    recs_text = "; ".join(recommendations) if recommendations else "None"
     _speak(
         state,
         "Reporting Agent",
@@ -1532,12 +1577,17 @@ Return JSON only.
         "SOC Dashboard",
         REPORT_SYSTEM_PROMPT,
         f"""
-Speak to the SOC Dashboard after final reporting.
+Speak to the SOC Dashboard after final reporting. Provide a comprehensive summary.
 - Report ID: {state["incident_report"]["report_id"]}
 - Executive summary: {state["incident_report"]["executive_summary"]}
+- Attack type: {attack["attack_type"]}
+- Severity: {attack["severity"]}
+- Source: {attack["primary_src_ip"]}
+- Target: {attack["target_ip"]}:{attack["target_port"]}
 - Response: {status}
 - Policy mode: {policy_mode}
-- Goal: summarize the outcome in one short natural utterance
+- Recommendations: {recs_text}
+- Explain the incident outcome, what response was taken, and what recommendations remain for the security team.
 """.strip(),
         f"I compiled the final incident report. Summary: {state['incident_report']['executive_summary']}",
         "summary",
